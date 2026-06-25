@@ -1,6 +1,7 @@
 import type { DashboardData, PageId } from '@/types'
 
 const hasNumber = (value: number | null) => value !== null && Number.isFinite(value)
+const hasMultipleValues = (values: Array<number | null>) => values.filter(hasNumber).length > 1
 
 export function hasActivityData(data: DashboardData) {
   const activity = data.activity
@@ -32,9 +33,14 @@ export function hasHealthData(data: DashboardData) {
 }
 
 export function hasSleepData(data: DashboardData) {
+  const sleep = data.sleep
   return hasNumber(data.sleep.totalMinutes)
     || hasNumber(data.sleep.score)
+    || hasNumber(sleep.efficiency)
     || data.sleep.stages.some((stage) => stage.minutes > 0)
+    || sleep.stageTimeline.length > 0
+    || hasMultipleValues(data.trends.map((point) => point.sleepMinutes))
+    || hasMultipleValues(data.trends.map((point) => point.sleepEfficiency))
 }
 
 export function hasBodyData(data: DashboardData) {
@@ -77,6 +83,7 @@ export function availableMetricCount(data: DashboardData) {
     data.health.bloodGlucoseMgDl,
     data.sleep.totalMinutes,
     data.sleep.score,
+    data.sleep.efficiency,
     data.body.weightKg,
     data.body.bmi,
     data.body.bodyFat,

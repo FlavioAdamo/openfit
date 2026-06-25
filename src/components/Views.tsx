@@ -383,6 +383,7 @@ export function TodayView({ data, navigate }: ViewProps) {
     ? compactMinutes(data.sleep.totalMinutes)
     : hasValue(data.sleep.score)
       ? `Score ${formatNumber(data.sleep.score)}`
+      : hasValue(data.sleep.efficiency) ? `${formatNumber(data.sleep.efficiency)}% efficiency`
       : data.sleep.stages.some((stage) => stage.minutes > 0) ? 'Stages recorded' : 'Partial data'
   const sleepNote = sleepGoalNote
   const heartNote = baselineNote(analysis.restingHeartRate, 'bpm')
@@ -739,7 +740,16 @@ export function SleepView({ data }: ViewProps) {
   const efficiencyCount = efficiencyValues.filter(hasValue).length
   const stageTimeline = data.sleep.stageTimeline ?? []
   const stageTransitions = data.sleep.stageTransitions
-  const hasSummary = hasValue(data.sleep.totalMinutes) || hasValue(data.sleep.score)
+  const hasSummary = hasValue(data.sleep.totalMinutes) || hasValue(data.sleep.score) || hasValue(data.sleep.efficiency)
+  const primarySleepLabel = hasValue(data.sleep.totalMinutes) ? 'Sleep time' : hasValue(data.sleep.score) ? 'Sleep score' : 'Efficiency'
+  const primarySleepValue = hasValue(data.sleep.totalMinutes)
+    ? compactMinutes(data.sleep.totalMinutes)
+    : hasValue(data.sleep.score)
+      ? `${formatNumber(data.sleep.score)} / 100`
+      : hasValue(data.sleep.efficiency) ? `${formatNumber(data.sleep.efficiency)}%` : '—'
+  const primarySleepNote = hasValue(data.sleep.totalMinutes)
+    ? `${formatTime(data.sleep.startTime)} – ${formatTime(data.sleep.endTime)}`
+    : 'Duration unavailable'
   return (
     <div className="page-stack sleep-page">
       {hasSummary && (
@@ -748,9 +758,9 @@ export function SleepView({ data }: ViewProps) {
             <PanelHeader eyebrow="Last night" title="Duration and quality" icon={SleepIcon} />
             <div className="sleep-main-summary">
               <div className="sleep-duration-large">
-                <span>Sleep time</span>
-                <strong>{compactMinutes(data.sleep.totalMinutes)}</strong>
-                <small>{formatTime(data.sleep.startTime)} – {formatTime(data.sleep.endTime)}</small>
+                <span>{primarySleepLabel}</span>
+                <strong>{primarySleepValue}</strong>
+                <small>{primarySleepNote}</small>
               </div>
               {hasValue(data.sleep.efficiency) && (
                 <div className="sleep-efficiency-ring">
@@ -934,7 +944,17 @@ export function DevicesView({ data, status }: ViewProps) {
     hasValue(data.health.hrvMs) && 'HRV',
     data.health.ecgClassification && 'ECG',
   ].filter((item): item is string => Boolean(item))
-  const sleep = [hasSleepData(data) && 'duration and stages', hasValue(data.sleep.score) && 'score'].filter((item): item is string => Boolean(item))
+  const sleepTrendCount = data.trends.map((point) => point.sleepMinutes).filter(hasValue).length
+  const sleepEfficiencyTrendCount = data.trends.map((point) => point.sleepEfficiency).filter(hasValue).length
+  const sleep = [
+    hasValue(data.sleep.totalMinutes) && 'duration',
+    data.sleep.stages.some((stage) => stage.minutes > 0) && 'stages',
+    data.sleep.stageTimeline.length > 0 && 'timeline',
+    hasValue(data.sleep.score) && 'score',
+    hasValue(data.sleep.efficiency) && 'efficiency',
+    sleepTrendCount > 1 && 'duration trend',
+    sleepEfficiencyTrendCount > 1 && 'efficiency trend',
+  ].filter((item): item is string => Boolean(item))
   const nightly = overnightSignals(data).map((signal) => signal.label.toLowerCase())
   const body = [
     hasValue(data.body.weightKg) && 'weight',

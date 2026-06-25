@@ -33,6 +33,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import type { DashboardData, FitbitAuthStatus, FitbitConfigInput, HealthProvider, PageId } from '@/types'
 import { createDemoData, localIso } from '@/data/demo'
 import { normalizeFitbitData } from '@/data/normalize'
+import { availablePages } from '@/lib/data-availability'
 import { formatDate, relativeTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { ActivityView, BodyView, DevicesView, HealthView, SleepView, TodayView } from '@/components/Views'
@@ -128,6 +129,7 @@ export default function App() {
   const syncingRef = useRef(false)
   const syncTargetDateRef = useRef<string | null>(null)
   const queuedDateRef = useRef<string | null>(null)
+  const pendingAssistantNavigationRef = useRef<{ date: string | null; page: PageId } | null>(null)
 
   useLayoutEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
@@ -261,7 +263,25 @@ export default function App() {
     return () => window.clearTimeout(timer)
   }, [toast])
 
-  const visibleNav = navItems
+  const visiblePageIds = useMemo(() => availablePages(data), [data])
+  const visiblePageSet = useMemo(() => new Set<PageId>(visiblePageIds), [visiblePageIds])
+  const visibleNav = useMemo(() => navItems.filter((item) => visiblePageSet.has(item.id)), [visiblePageSet])
+
+  useEffect(() => {
+    if (!visiblePageSet.has(page)) setPage('today')
+  }, [page, visiblePageSet])
+
+  useEffect(() => {
+    const pending = pendingAssistantNavigationRef.current
+    if (!pending) return
+    if (pending.date && selectedDate !== pending.date && data.selectedDate !== pending.date) {
+      pendingAssistantNavigationRef.current = null
+      return
+    }
+    if (pending.date && data.selectedDate !== pending.date) return
+    pendingAssistantNavigationRef.current = null
+    if (visiblePageSet.has(pending.page)) setPage(pending.page)
+  }, [data.selectedDate, selectedDate, visiblePageSet])
 
   const changeDate = (date: string) => {
     if (!date || date > localIso()) return
@@ -329,15 +349,19 @@ export default function App() {
     if (!result.canceled) setToast({ tone: 'success', message: 'JSON archive exported.' })
   }
 
+  const navigate = useCallback((nextPage: PageId) => {
+    if (visiblePageSet.has(nextPage)) setPage(nextPage)
+  }, [visiblePageSet])
+
   const currentView = useMemo(() => {
-    const props = { data, status, navigate: setPage }
+    const props = { data, status, navigate }
     if (page === 'activity') return <ActivityView {...props} />
     if (page === 'health') return <HealthView {...props} />
     if (page === 'sleep') return <SleepView {...props} />
     if (page === 'body') return <BodyView {...props} />
     if (page === 'devices') return <DevicesView {...props} />
     return <TodayView {...props} />
-  }, [data, page, status])
+  }, [data, navigate, page, status])
 
   const isToday = selectedDate === localIso()
   const sourceLabel = status.connected
@@ -356,13 +380,19 @@ export default function App() {
     ? null
     : Math.max(0, Math.min(100, Math.round(data.device.batteryLevel)))
 
-  const navigate = (nextPage: PageId) => {
-    setPage(nextPage)
-  }
-
   const navigateFromAssistant = (navigation: AssistantNavigation) => {
+    if (navigation.date && navigation.page) {
+      if (navigation.date === data.selectedDate) {
+        changeDate(navigation.date)
+        navigate(navigation.page)
+        return
+      }
+      pendingAssistantNavigationRef.current = { date: navigation.date, page: navigation.page }
+      changeDate(navigation.date)
+      return
+    }
     if (navigation.date) changeDate(navigation.date)
-    if (navigation.page) setPage(navigation.page)
+    if (navigation.page) navigate(navigation.page)
   }
 
   return (
