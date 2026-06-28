@@ -383,10 +383,18 @@ export function TodayView({ data, navigate }: ViewProps) {
     ? compactMinutes(data.sleep.totalMinutes)
     : hasValue(data.sleep.score)
       ? `Score ${formatNumber(data.sleep.score)}`
+      : hasValue(data.sleep.performance)
+        ? `Performance ${formatNumber(data.sleep.performance)}%`
       : data.sleep.stages.some((stage) => stage.minutes > 0) ? 'Stages recorded' : 'Partial data'
   const sleepNote = sleepGoalNote
   const heartNote = baselineNote(analysis.restingHeartRate, 'bpm')
   const vitalSnapshots = [
+    hasValue(data.health.recoveryScore) ? {
+      id: 'recovery', label: 'Recovery', value: `${formatNumber(data.health.recoveryScore)}%`,
+    } : null,
+    hasValue(data.health.strain) ? {
+      id: 'strain', label: 'Strain', value: formatDecimal(data.health.strain),
+    } : null,
     hasValue(data.health.hrvMs) ? {
       id: 'hrv', label: 'HRV', value: `${formatNumber(data.health.hrvMs)} ms`,
     } : null,
@@ -461,7 +469,7 @@ export function TodayView({ data, navigate }: ViewProps) {
                     <PanelHeader title="Sleep" icon={SleepIcon} action={<ChevronRightIcon aria-hidden="true" />} />
                     <div className="sleep-overview-lead">
                       <div className="sleep-overview-duration"><strong>{sleepPrimaryValue}</strong>{(data.sleep.startTime || data.sleep.endTime) && <span>{formatTime(data.sleep.startTime)} – {formatTime(data.sleep.endTime)}</span>}<small>{sleepGoalNote}</small></div>
-                      {(hasValue(data.sleep.score) || hasValue(data.sleep.efficiency)) && <RadialProgress value={data.sleep.score ?? data.sleep.efficiency} color="var(--category-sleep)" label={hasValue(data.sleep.score) ? sleepScoreCategory(data.sleep.score) : 'efficiency'} valueLabel={formatNumber(data.sleep.score ?? data.sleep.efficiency)} size={68} />}
+                      {(hasValue(data.sleep.score) || hasValue(data.sleep.performance) || hasValue(data.sleep.efficiency)) && <RadialProgress value={data.sleep.score ?? data.sleep.performance ?? data.sleep.efficiency} color="var(--category-sleep)" label={hasValue(data.sleep.score) ? sleepScoreCategory(data.sleep.score) : hasValue(data.sleep.performance) ? 'performance' : 'efficiency'} valueLabel={formatNumber(data.sleep.score ?? data.sleep.performance ?? data.sleep.efficiency)} size={68} />}
                     </div>
                     {data.sleep.stages.some((stage) => stage.minutes > 0) && <SleepStageBar stages={data.sleep.stages} compact showLegend={false} />}
                   </Panel>
@@ -640,6 +648,8 @@ export function HealthView({ data }: ViewProps) {
   const restingCount = restingValues.filter(hasValue).length
   const signals = overnightSignals(data)
   const secondary = presentSignals([
+    hasValue(data.health.recoveryScore) ? { label: 'Recovery', value: formatNumber(data.health.recoveryScore), unit: '%', note: 'WHOOP recovery score', icon: GaugeIcon } : null,
+    hasValue(data.health.strain) ? { label: 'Strain', value: formatDecimal(data.health.strain), note: 'WHOOP day strain', icon: ActivityIcon } : null,
     hasValue(data.health.cardioScore) ? { label: 'Cardio fitness', value: formatNumber(data.health.cardioScore), note: 'Latest score', icon: GaugeIcon } : null,
     hasValue(data.health.bloodGlucoseMgDl) ? { label: 'Blood glucose', value: formatNumber(data.health.bloodGlucoseMgDl), unit: 'mg/dL', note: 'Latest measurement', icon: WaterIcon } : null,
     hasValue(data.health.irregularRhythmAlerts) ? { label: 'Irregular rhythm', value: formatNumber(data.health.irregularRhythmAlerts), unit: 'alerts', note: 'During the synced period', icon: ShieldIcon } : null,
@@ -654,6 +664,8 @@ export function HealthView({ data }: ViewProps) {
     data.trends.map((point) => point.skinTemperature),
     data.trends.map((point) => point.coreTemperature),
     data.trends.map((point) => point.cardioScore),
+    data.trends.map((point) => point.recoveryScore),
+    data.trends.map((point) => point.strain),
   ]
   const hasPhysiologyTrends = physiologyTrendValues.some((values) => values.filter(hasValue).length > 1)
 
@@ -713,6 +725,8 @@ export function HealthView({ data }: ViewProps) {
             <MetricTrendPanel data={data} category="recovery" icon={GaugeIcon} title="Skin temperature" values={data.trends.map((point) => point.skinTemperature)} formatter={(value) => `${signedNumber(value, 1)} °C`} />
             <MetricTrendPanel data={data} category="recovery" icon={GaugeIcon} title="Body temperature" values={data.trends.map((point) => point.coreTemperature)} formatter={(value) => `${formatDecimal(value)} °C`} />
             <MetricTrendPanel data={data} category="heart" icon={GaugeIcon} title="Cardio fitness" values={data.trends.map((point) => point.cardioScore)} formatter={(value) => formatNumber(value)} />
+            <MetricTrendPanel data={data} category="recovery" icon={GaugeIcon} title="Recovery" values={data.trends.map((point) => point.recoveryScore)} formatter={(value) => `${formatNumber(value)}%`} target={70} />
+            <MetricTrendPanel data={data} category="activity" icon={ActivityIcon} title="Strain" values={data.trends.map((point) => point.strain)} formatter={(value) => formatDecimal(value)} />
           </div>
         </section>
       )}
@@ -739,7 +753,7 @@ export function SleepView({ data }: ViewProps) {
   const efficiencyCount = efficiencyValues.filter(hasValue).length
   const stageTimeline = data.sleep.stageTimeline ?? []
   const stageTransitions = data.sleep.stageTransitions
-  const hasSummary = hasValue(data.sleep.totalMinutes) || hasValue(data.sleep.score)
+  const hasSummary = hasValue(data.sleep.totalMinutes) || hasValue(data.sleep.score) || hasValue(data.sleep.performance)
   return (
     <div className="page-stack sleep-page">
       {hasSummary && (
@@ -766,6 +780,7 @@ export function SleepView({ data }: ViewProps) {
             </div>
             <div className="sleep-bullets">
               {hasValue(data.sleep.score) && <BulletChart value={data.sleep.score} max={100} label="Sleep score" valueLabel={`${formatNumber(data.sleep.score)} / 100 · ${sleepScoreCategory(data.sleep.score)}`} color="var(--category-sleep)" />}
+              {!hasValue(data.sleep.score) && hasValue(data.sleep.performance) && <BulletChart value={data.sleep.performance} max={100} label="Sleep performance" valueLabel={`${formatNumber(data.sleep.performance)}%`} color="var(--category-sleep)" />}
               {hasValue(data.sleep.totalMinutes) && hasValue(data.sleep.goalMinutes) && (
                 <BulletChart
                   value={data.sleep.totalMinutes}
@@ -944,7 +959,7 @@ export function DevicesView({ data, status }: ViewProps) {
   ].filter((item): item is string => Boolean(item))
   const isDemo = data.source === 'demo'
   const isConnected = status.connected || isDemo
-  const sourceName = isDemo ? 'Sample data' : status.provider === 'fitbit-legacy' ? 'Fitbit legacy' : 'Google Health'
+  const sourceName = isDemo ? 'Sample data' : status.provider === 'fitbit-legacy' ? 'Fitbit legacy' : status.provider === 'whoop' ? 'WHOOP' : 'Google Health'
   const deviceName = data.device?.name ?? (isDemo ? 'Google Fitbit Air' : sourceName)
 
   return (

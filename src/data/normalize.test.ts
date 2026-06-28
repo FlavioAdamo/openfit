@@ -236,4 +236,75 @@ describe('normalizeFitbitData', () => {
     expect(result.trends[0]).toMatchObject({ hrvMs: 44, spo2: 96.8, breathingRate: 14.4, skinTemperature: -0.1 })
     expect(result.trends[1]).toMatchObject({ hrvMs: 48, spo2: 97.2, breathingRate: 14.8, skinTemperature: 0.2 })
   })
+
+  it('normalizes WHOOP API data into canonical OpenFit fields', () => {
+    const payload: RawFitbitPayload = {
+      source: 'whoop',
+      date: '2026-06-22',
+      generatedAt: '2026-06-22T12:00:00.000Z',
+      endpoints: {
+        profile: { user: { displayName: 'Ada Whoop' } },
+        devices: [{ id: 'whoop-1', type: 'WHOOP_ACCOUNT', deviceVersion: 'WHOOP', features: ['RECOVERY', 'STRAIN'] }],
+        activity: { summary: { caloriesOut: 2400, activeZoneMinutes: { totalMinutes: 47 } } },
+        heartIntraday: { 'activities-heart': [{ value: { restingHeartRate: 61 } }], 'activities-heart-intraday': { dataset: [] } },
+        hrv: { hrv: [{ value: { dailyRmssd: 42.5 } }] },
+        spo2: { value: { avg: 96.8 } },
+        breathing: { br: [{ value: { breathingRate: 15.2 } }] },
+        skinTemperature: { tempSkin: [{ value: { nightlyTemperatureCelsius: 33.7 } }] },
+        sleep: {
+          sleep: [{
+            logId: 'sleep-1',
+            dateOfSleep: '2026-06-22',
+            isMainSleep: true,
+            sleepPerformance: 88,
+            minutesAsleep: 421,
+            minutesAwake: 34,
+            timeInBed: 455,
+            efficiency: 92,
+            levels: {
+              summary: {
+                deep: { minutes: 72 },
+                light: { minutes: 246 },
+                rem: { minutes: 103 },
+                wake: { minutes: 34, count: 9 },
+              },
+              data: [],
+            },
+          }],
+        },
+        sleepTrend: { sleep: [{ dateOfSleep: '2026-06-22', isMainSleep: true, minutesAsleep: 421, efficiency: 92 }] },
+        activities: { activities: [{ logId: 'workout-1', activityName: 'running', startTime: '2026-06-22T18:00:00Z', duration: 2_400_000, calories: 375, averageHeartRate: 141 }] },
+        metricTrends: {
+          values: [
+            { dateTime: '2026-06-21', hrvMs: 39, spo2: 96.1, recoveryScore: 64, strain: 9.2, sleepPerformance: 81 },
+            { dateTime: '2026-06-22', hrvMs: 42.5, spo2: 96.8, breathingRate: 15.2, recoveryScore: 72, strain: 12.4, sleepPerformance: 88 },
+          ],
+        },
+      },
+      errors: [],
+      rateLimit: { limit: 100, remaining: 98, resetSeconds: 3 },
+    }
+
+    const result = normalizeFitbitData(payload)
+
+    expect(result.source).toBe('whoop')
+    expect(result.profile.displayName).toBe('Ada Whoop')
+    expect(result.health.restingHeartRate).toBe(61)
+    expect(result.health.hrvMs).toBe(42.5)
+    expect(result.health.spo2).toBe(96.8)
+    expect(result.health.breathingRate).toBe(15.2)
+    expect(result.health.skinNightlyTemperatureCelsius).toBe(33.7)
+    expect(result.health.recoveryScore).toBe(72)
+    expect(result.health.strain).toBe(12.4)
+    expect(result.sleep.performance).toBe(88)
+    expect(result.sleep.efficiency).toBe(92)
+    expect(result.sleep.stages.map((stage) => [stage.key, stage.minutes])).toEqual([
+      ['deep', 72],
+      ['light', 246],
+      ['rem', 103],
+      ['wake', 34],
+    ])
+    expect(result.trends.at(-1)).toMatchObject({ recoveryScore: 72, strain: 12.4, sleepPerformance: 88, hrvMs: 42.5, spo2: 96.8 })
+    expect(result.activities[0]).toMatchObject({ id: 'workout-1', name: 'running', calories: 375, averageHeartRate: 141 })
+  })
 })

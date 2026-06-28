@@ -9,6 +9,7 @@ const { fileURLToPath } = require('node:url')
 
 const googleHealth = require('./google-health-service.cjs')
 const fitbitLegacy = require('./fitbit-legacy-service.cjs')
+const whoop = require('./whoop-service.cjs')
 const healthCache = require('./health-cache.cjs')
 const { createCodexService, resolveCodexBinary } = require('./codex-service.cjs')
 
@@ -17,18 +18,23 @@ app.commandLine.appendSwitch('lang', 'en-US')
 const APP_ICON_PATH = path.join(__dirname, '..', 'build', 'icon.png')
 const APP_DISPLAY_NAME = 'OpenFit'
 const DEFAULT_REDIRECT_URI = 'http://127.0.0.1:42813/oauth/callback'
+const DEFAULT_WHOOP_REDIRECT_URI = DEFAULT_REDIRECT_URI
 // safeStorage keys are tied to the historical app name, so initialize Electron
 // with the legacy identity before the secure storage backend is created.
 const LEGACY_USER_DATA_NAME = 'pulseboard-fitbit-desktop'
 app.setName(LEGACY_USER_DATA_NAME)
+const singleInstanceLock = app.requestSingleInstanceLock()
+if (!singleInstanceLock) app.quit()
 const PROVIDERS = {
   'google-health': googleHealth,
   'fitbit-legacy': fitbitLegacy,
+  whoop,
 }
 
 let mainWindow = null
 let oauthServer = null
 let oauthTimeout = null
+let pendingOAuthFlow = null
 let credentialFile = null
 let cacheFile = null
 let syncInFlight = null
@@ -98,13 +104,13 @@ function publicStatus() {
   const credentials = getCredentials()
   const config = credentials.config || {}
   const provider = PROVIDERS[config.provider] ? config.provider : 'google-health'
-  const needsSecret = provider === 'google-health'
+  const needsSecret = provider === 'google-health' || provider === 'whoop'
   return {
     isElectron: true,
     configured: Boolean(config.clientId && config.redirectUri && (!needsSecret || config.clientSecret)),
     connected: Boolean(credentials.token?.access_token || credentials.token?.refresh_token),
     clientId: config.clientId || '',
-    redirectUri: config.redirectUri || DEFAULT_REDIRECT_URI,
+    redirectUri: config.redirectUri || (provider === 'whoop' ? DEFAULT_WHOOP_REDIRECT_URI : DEFAULT_REDIRECT_URI),
     hasClientSecret: Boolean(config.clientSecret),
     storageEncrypted: storageEncryptionAvailable(),
     lastSyncAt: credentials.lastSyncAt || null,
@@ -122,14 +128,20 @@ function providerFor(credentials) {
 function validateConfig(input, previous) {
   const provider = PROVIDERS[input.provider] ? input.provider : 'google-health'
   const clientId = String(input.clientId || '').trim()
-  const redirectUri = String(input.redirectUri || DEFAULT_REDIRECT_URI).trim()
+  const redirectUri = String(input.redirectUri || (provider === 'whoop' ? DEFAULT_WHOOP_REDIRECT_URI : DEFAULT_REDIRECT_URI)).trim()
   const sameProvider = previous?.provider === provider
   const clientSecret = String(input.clientSecret || (sameProvider ? previous?.clientSecret : '') || '').trim()
   if (!clientId) throw new Error('Enter the OAuth Client ID.')
-  if (provider === 'google-health' && !clientSecret) throw new Error('Google Health requires the Cloud project Client Secret.')
+  if ((provider === 'google-health' || provider === 'whoop') && !clientSecret) throw new Error(`${provider === 'whoop' ? 'WHOOP' : 'Google Health'} requires the OAuth Client Secret.`)
   let parsed
   try { parsed = new URL(redirectUri) } catch { throw new Error('The callback URL is invalid.') }
-  if (parsed.protocol !== 'http:' || parsed.hostname !== '127.0.0.1' || !parsed.port || parsed.username || parsed.password || parsed.hash) {
+  if (provider === 'whoop') {
+    const isLoopback = parsed.protocol === 'http:' && parsed.hostname === '127.0.0.1' && Boolean(parsed.port)
+    const isHttps = parsed.protocol === 'https:'
+    if (!(isLoopback || isHttps) || parsed.username || parsed.password || parsed.hash) {
+      throw new Error('For WHOOP, use the loopback callback http://127.0.0.1:42813/oauth/callback or an HTTPS callback handled by your backend.')
+    }
+  } else if (parsed.protocol !== 'http:' || parsed.hostname !== '127.0.0.1' || !parsed.port || parsed.username || parsed.password || parsed.hash) {
     throw new Error('For the desktop app, use an http://127.0.0.1 loopback callback with a fixed port.')
   }
   return { provider, clientId, clientSecret, redirectUri }
@@ -138,6 +150,7 @@ function validateConfig(input, previous) {
 function closeOAuthServer() {
   if (oauthTimeout) clearTimeout(oauthTimeout)
   oauthTimeout = null
+  pendingOAuthFlow = null
   if (oauthServer) {
     try { oauthServer.close() } catch { /* server already stopped */ }
   }
@@ -154,62 +167,36 @@ function escapeHtml(value) {
 }
 
 async function startOAuthFlow() {
-  if (oauthServer) throw new Error('A connection process is already in progress.')
+  if (oauthServer || pendingOAuthFlow) throw new Error('A connection process is already in progress.')
   const credentials = getCredentials()
   const status = publicStatus()
   if (!status.configured) throw new Error('Complete the OAuth configuration first.')
   const service = providerFor(credentials)
   const redirect = new URL(credentials.config.redirectUri)
-  const state = crypto.randomBytes(24).toString('hex')
+  const state = crypto.randomBytes(4).toString('hex')
   const pkce = service.createPkce()
+  pendingOAuthFlow = { credentials, service, state, pkce }
 
-  await new Promise((resolve, reject) => {
-    oauthServer = http.createServer(async (request, response) => {
-      const incoming = new URL(request.url, credentials.config.redirectUri)
-      if (incoming.pathname !== redirect.pathname) {
-        response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
-        response.end('Not found')
-        return
-      }
-      const returnedState = incoming.searchParams.get('state')
-      const code = incoming.searchParams.get('code')
-      const oauthError = incoming.searchParams.get('error')
-      if (returnedState !== state) {
-        response.writeHead(400, { 'content-type': 'text/html; charset=utf-8' })
-        response.end(oauthPage(false, 'The request security check is invalid.'))
-        mainWindow?.webContents.send('fitbit:auth-complete', { ok: false, error: 'Invalid OAuth state.' })
+  if (redirect.protocol === 'http:') {
+    await new Promise((resolve, reject) => {
+      oauthServer = http.createServer(async (request, response) => {
+        const incoming = new URL(request.url, credentials.config.redirectUri)
+        if (incoming.pathname !== redirect.pathname) {
+          response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+          response.end('Not found')
+          return
+        }
+        const result = await completeOAuthAuthorization(incoming)
+        response.writeHead(result.ok ? 200 : 400, { 'content-type': 'text/html; charset=utf-8' })
+        response.end(oauthPage(result.ok, result.message))
+      })
+      oauthServer.once('error', (error) => {
         closeOAuthServer()
-        return
-      }
-      if (oauthError || !code) {
-        const message = incoming.searchParams.get('error_description') || oauthError || 'Authorization canceled.'
-        response.writeHead(400, { 'content-type': 'text/html; charset=utf-8' })
-        response.end(oauthPage(false, message))
-        mainWindow?.webContents.send('fitbit:auth-complete', { ok: false, error: message })
-        closeOAuthServer()
-        return
-      }
-      try {
-        const token = await service.exchangeAuthorizationCode(credentials.config, code, pkce.verifier)
-        saveCredentials({ ...credentials, token, lastSyncAt: null })
-        deleteIfPresent(cacheFile)
-        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-        response.end(oauthPage(true, service.provider === 'google-health' ? 'Google Health is ready.' : 'Fitbit legacy is ready.'))
-        mainWindow?.webContents.send('fitbit:auth-complete', { ok: true })
-      } catch (error) {
-        response.writeHead(500, { 'content-type': 'text/html; charset=utf-8' })
-        response.end(oauthPage(false, error.message))
-        mainWindow?.webContents.send('fitbit:auth-complete', { ok: false, error: error.message })
-      } finally {
-        closeOAuthServer()
-      }
+        reject(error.code === 'EADDRINUSE' ? new Error(`Port ${redirect.port} is already in use.`) : error)
+      })
+      oauthServer.listen(Number(redirect.port), '127.0.0.1', resolve)
     })
-    oauthServer.once('error', (error) => {
-      closeOAuthServer()
-      reject(error.code === 'EADDRINUSE' ? new Error(`Port ${redirect.port} is already in use.`) : error)
-    })
-    oauthServer.listen(Number(redirect.port), '127.0.0.1', resolve)
-  })
+  }
 
   oauthTimeout = setTimeout(() => {
     mainWindow?.webContents.send('fitbit:auth-complete', { ok: false, error: 'The OAuth session expired.' })
@@ -223,6 +210,39 @@ async function startOAuthFlow() {
     throw error
   }
   return { ok: true }
+}
+
+async function completeOAuthAuthorization(incoming) {
+  const active = pendingOAuthFlow
+  if (!active) return { ok: false, message: 'No OAuth session is active.' }
+  const returnedState = incoming.searchParams.get('state')
+  const code = incoming.searchParams.get('code')
+  const oauthError = incoming.searchParams.get('error')
+  if (returnedState !== active.state) {
+    mainWindow?.webContents.send('fitbit:auth-complete', { ok: false, error: 'Invalid OAuth state.' })
+    closeOAuthServer()
+    return { ok: false, message: 'The request security check is invalid.' }
+  }
+  if (oauthError || !code) {
+    const message = incoming.searchParams.get('error_description') || oauthError || 'Authorization canceled.'
+    mainWindow?.webContents.send('fitbit:auth-complete', { ok: false, error: message })
+    closeOAuthServer()
+    return { ok: false, message }
+  }
+  try {
+    const token = await active.service.exchangeAuthorizationCode(active.credentials.config, code, active.pkce.verifier)
+    saveCredentials({ ...active.credentials, token, lastSyncAt: null })
+    deleteIfPresent(cacheFile)
+    const providerName = active.service.provider === 'google-health' ? 'Google Health' : active.service.provider === 'whoop' ? 'WHOOP' : 'Fitbit legacy'
+    mainWindow?.webContents.send('fitbit:auth-complete', { ok: true })
+    closeOAuthServer()
+    return { ok: true, message: `${providerName} is ready.` }
+  } catch (error) {
+    const message = error.message || 'Authorization failed.'
+    mainWindow?.webContents.send('fitbit:auth-complete', { ok: false, error: message })
+    closeOAuthServer()
+    return { ok: false, message }
+  }
 }
 
 async function validAccessToken(credentials) {
@@ -254,9 +274,11 @@ async function syncData(date) {
   const total = Number(payload.requestStats?.total || 0)
   const succeeded = Number(payload.requestStats?.succeeded || 0)
   const successfulKeys = Array.isArray(payload.requestStats?.successfulKeys) ? payload.requestStats.successfulKeys : []
-  const minimumUsefulResponses = Math.max(3, Math.ceil(total * 0.2))
+  const minimumUsefulResponses = service.provider === 'whoop' ? 1 : Math.max(3, Math.ceil(total * 0.2))
   const measurementKeys = service.provider === 'google-health'
     ? ['stepsDaily', 'caloriesDaily', 'distanceDaily', 'activeMinutesDaily', 'zoneMinutesDaily', 'weightDaily', 'waterDaily', 'nutritionDaily', 'heartIntradayRaw', 'restingHeartRaw', 'hrvRaw', 'spo2Raw', 'breathingRaw', 'skinTemperatureRaw', 'cardioRaw', 'sleepRaw', 'activitiesRaw', 'ecgRaw', 'irnAlertsRaw', 'glucoseRaw']
+    : service.provider === 'whoop'
+    ? ['cycles', 'recoveries', 'sleeps', 'workouts', 'body']
     : ['activity', 'stepsIntraday', 'stepsTrend', 'caloriesTrend', 'heartIntraday', 'heartTrend', 'sleep', 'sleepTrend', 'bodyWeight', 'bodyFat', 'food', 'water', 'breathing', 'hrv', 'spo2', 'skinTemperature', 'coreTemperature', 'cardio', 'ecg', 'irregularRhythmAlerts', 'bloodGlucose', 'activities']
   const hasMeasurementResponse = successfulKeys.some((key) => measurementKeys.includes(key))
   if (!total || succeeded < minimumUsefulResponses || !hasMeasurementResponse) {
@@ -489,8 +511,47 @@ function registerIpc() {
   })
 }
 
+function registerProtocolClient() {
+  try {
+    if (process.defaultApp && process.argv[1]) {
+      app.setAsDefaultProtocolClient('openfit', process.execPath, [path.resolve(process.argv[1])])
+    } else {
+      app.setAsDefaultProtocolClient('openfit')
+    }
+  } catch (error) {
+    console.warn('Could not register openfit:// protocol handler.', error)
+  }
+}
+
+function handleOpenFitUrl(value) {
+  let parsed
+  try { parsed = new URL(String(value)) } catch { return false }
+  if (parsed.protocol !== 'openfit:' || parsed.hostname !== 'oauth' || parsed.pathname !== '/whoop') return false
+  void completeOAuthAuthorization(parsed)
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.focus()
+  }
+  return true
+}
+
+app.on('open-url', (event, url) => {
+  event.preventDefault()
+  handleOpenFitUrl(url)
+})
+
+app.on('second-instance', (_event, argv) => {
+  const callbackUrl = argv.find((value) => String(value).startsWith('openfit://'))
+  if (callbackUrl) handleOpenFitUrl(callbackUrl)
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.focus()
+  }
+})
+
 app.whenReady().then(() => {
   app.setName(APP_DISPLAY_NAME)
+  registerProtocolClient()
   if (process.platform === 'darwin') app.dock.setIcon(APP_ICON_PATH)
   const userData = process.env.OPENFIT_USER_DATA || path.join(app.getPath('appData'), LEGACY_USER_DATA_NAME)
   app.setPath('userData', userData)
@@ -503,7 +564,7 @@ app.whenReady().then(() => {
       callback({
         responseHeaders: {
           ...details.responseHeaders,
-          'Content-Security-Policy': ["default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://health.googleapis.com https://api.fitbit.com"],
+          'Content-Security-Policy': ["default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://health.googleapis.com https://api.fitbit.com https://api.prod.whoop.com"],
         },
       })
     })

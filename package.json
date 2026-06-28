@@ -21,7 +21,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -b --pretty false",
-    "check:electron": "node --check electron/main.cjs && node --check electron/preload.cjs && node --check electron/google-health-service.cjs && node --check electron/fitbit-legacy-service.cjs && node --check electron/health-cache.cjs && node --check electron/codex-service.cjs",
+    "check:electron": "node --check electron/main.cjs && node --check electron/preload.cjs && node --check electron/google-health-service.cjs && node --check electron/fitbit-legacy-service.cjs && node --check electron/whoop-service.cjs && node --check electron/health-cache.cjs && node --check electron/codex-service.cjs",
     "check": "npm run typecheck && npm run check:electron && npm test && npm run build",
     "capture:ui": "electron scripts/capture-ui.cjs",
     "dist": "npm run build && electron-builder"

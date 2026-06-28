@@ -1,8 +1,8 @@
 export type PageId = 'today' | 'activity' | 'health' | 'sleep' | 'body' | 'devices'
 
-export type DataSource = 'demo' | 'fitbit' | 'google-health' | 'cache'
+export type DataSource = 'demo' | 'fitbit' | 'google-health' | 'whoop' | 'cache'
 
-export type HealthProvider = 'google-health' | 'fitbit-legacy'
+export type HealthProvider = 'google-health' | 'fitbit-legacy' | 'whoop'
 
 export interface TimePoint {
   time: string
@@ -26,6 +26,9 @@ export interface TrendPoint {
   skinTemperature: number | null
   coreTemperature: number | null
   cardioScore: number | null
+  strain: number | null
+  recoveryScore: number | null
+  sleepPerformance: number | null
   sleepMinutes: number | null
   sleepScore: number | null
   sleepEfficiency: number | null
@@ -139,6 +142,8 @@ export interface DashboardData {
     coreTemperature: number | null
     vo2Max: string | null
     cardioScore: number | null
+    strain: number | null
+    recoveryScore: number | null
     ecgClassification: string | null
     bloodGlucoseMgDl: number | null
     irregularRhythmAlerts: number | null
@@ -147,6 +152,7 @@ export interface DashboardData {
     totalMinutes: number | null
     goalMinutes: number | null
     score: number | null
+    performance: number | null
     efficiency: number | null
     startTime: string | null
     endTime: string | null
@@ -184,7 +190,7 @@ export interface DashboardData {
 }
 
 export interface RawFitbitPayload {
-  source: 'fitbit' | 'google-health'
+  source: 'fitbit' | 'google-health' | 'whoop'
   date: string
   generatedAt: string
   cacheHit?: boolean

@@ -223,6 +223,7 @@ export function normalizeFitbitData(payload: RawFitbitPayload): DashboardData {
     { minutes: numeric(item.minutesAsleep), score: numeric(item.sleepScore), efficiency: numeric(item.efficiency) },
   ]))
   const metricTrend = new Map(asArray(asObject(e.metricTrends).values).map((item) => [String(item.dateTime), item]))
+  const selectedMetric = asObject(metricTrend.get(payload.date))
   const weightTrendRecords = asArray(asObject(e.bodyWeight).weight)
   const weightTrend = new Map(weightTrendRecords.map((item) => [String(item.date), numeric(item.weight)]))
   const allDates = new Set([
@@ -251,6 +252,9 @@ export function normalizeFitbitData(payload: RawFitbitPayload): DashboardData {
       skinTemperature: numeric(metric.skinTemperature),
       coreTemperature: numeric(metric.coreTemperature),
       cardioScore: numeric(metric.cardioScore),
+      strain: numeric(metric.strain),
+      recoveryScore: numeric(metric.recoveryScore),
+      sleepPerformance: numeric(metric.sleepPerformance),
       sleepMinutes: sleepTrend.get(date)?.minutes ?? null,
       sleepScore: sleepTrend.get(date)?.score ?? null,
       sleepEfficiency: sleepTrend.get(date)?.efficiency ?? numeric(metric.sleepEfficiency),
@@ -275,7 +279,7 @@ export function normalizeFitbitData(payload: RawFitbitPayload): DashboardData {
   const cardioScore = vo2Max ? numeric(vo2Max.split('-').at(-1)?.trim()) : null
 
   return {
-    source: payload.source === 'google-health' ? 'google-health' : 'fitbit',
+    source: payload.source === 'google-health' ? 'google-health' : payload.source === 'whoop' ? 'whoop' : 'fitbit',
     selectedDate: payload.date,
     generatedAt: payload.generatedAt,
     profile: {
@@ -339,6 +343,8 @@ export function normalizeFitbitData(payload: RawFitbitPayload): DashboardData {
       coreTemperature: firstNumber(coreTemp?.value?.coreTemperature, coreTemp?.value),
       vo2Max,
       cardioScore,
+      strain: numeric(selectedMetric.strain),
+      recoveryScore: numeric(selectedMetric.recoveryScore),
       ecgClassification: ecg?.resultClassification ? String(ecg.resultClassification).replaceAll('_', ' ') : null,
       bloodGlucoseMgDl: firstNumber(
         glucosePoint?.bloodGlucose?.bloodGlucoseMilligramsPerDeciliter,
@@ -352,6 +358,7 @@ export function normalizeFitbitData(payload: RawFitbitPayload): DashboardData {
       totalMinutes: numeric(sleepRecord?.minutesAsleep),
       goalMinutes: numeric(sleepGoal.minDuration),
       score: numeric(sleepRecord?.sleepScore),
+      performance: firstNumber(sleepRecord?.sleepPerformance, selectedMetric.sleepPerformance),
       efficiency: numeric(sleepRecord?.efficiency),
       startTime: sleepRecord?.startTime ?? null,
       endTime: sleepRecord?.endTime ?? null,
