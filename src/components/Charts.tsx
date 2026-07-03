@@ -1,6 +1,6 @@
 import { useId, useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent, PointerEvent, ReactNode } from 'react'
-import type { SleepStage, SleepStageSegment } from '../types'
+import type { SleepStage, SleepStageSegment, WeeklyAggregate } from '../types'
 import { formatNumber, formatTime } from '../lib/format'
 
 type NumericValue = number | null
@@ -280,6 +280,7 @@ export function ColumnChart({
   labels = [],
   xValues,
   color = 'var(--color-indigo)',
+  barColors,
   height = 220,
   compact = false,
   formatter = (value) => formatNumber(value),
@@ -287,7 +288,7 @@ export function ColumnChart({
   targetLabel = 'Goal',
   ariaLabel = 'Values by period',
   showRangeLabels = false,
-}: BaseChartProps) {
+}: BaseChartProps & { barColors?: Array<string | null | undefined> }) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null)
   const valid = finiteValues(values)
   const { containerRef, width } = useResponsiveChartWidth(valid.length > 0)
@@ -355,7 +356,7 @@ export function ColumnChart({
               width={barWidth}
               height={barHeight}
               rx={Math.min(4, barWidth / 3)}
-              fill={value === null ? 'var(--color-graphite)' : color}
+              fill={value === null ? 'var(--color-graphite)' : barColors?.[index] || color}
               opacity={value === null ? 0.3 : activeIndex === null || activeIndex === index ? 0.92 : 0.34}
               className="chart-column-mark"
               tabIndex={value === null ? undefined : 0}
@@ -386,6 +387,219 @@ export function ColumnChart({
       )}
       {compact && showRangeLabels && <CompactRangeLabels labels={labels} />}
       <AccessibleChartTable title={ariaLabel} labels={labels} values={values} formatter={formatter} />
+    </div>
+  )
+}
+
+export function WeeklyStatChart({
+  weeks,
+  color = 'var(--color-indigo)',
+  alertColor = 'var(--color-coral)',
+  height = 240,
+  formatter = (value: number) => formatNumber(value),
+  ariaLabel = 'Weekly statistical trend',
+}: {
+  weeks: WeeklyAggregate[]
+  color?: string
+  alertColor?: string
+  height?: number
+  formatter?: (value: number) => string
+  ariaLabel?: string
+}) {
+  const [activeWeek, setActiveWeek] = useState<number | null>(null)
+  const [activePoint, setActivePoint] = useState<{ weekIndex: number; pointIndex: number } | null>(null)
+  const valid = weeks.filter((week) => Number.isFinite(week.mean))
+  const { containerRef, width } = useResponsiveChartWidth(valid.length > 0)
+  if (!valid.length) return <div className="chart-empty" style={{ height }}>No data for this range</div>
+
+  const margin = { top: 18, right: 16, bottom: 40, left: 64 }
+  const plotWidth = width - margin.left - margin.right
+  const plotHeight = height - margin.top - margin.bottom
+  const allValues = weeks.flatMap((week) => [week.min, week.max, week.mean - week.sd, week.mean + week.sd]).filter(Number.isFinite)
+  const domain = lineDomain(allValues as number[], null)
+  const xFor = (index: number) => margin.left + ((index + 0.5) / weeks.length) * plotWidth
+  const yFor = (value: number) => margin.top + ((domain.max - value) / (domain.max - domain.min)) * plotHeight
+  const ticks = [domain.min, Math.min(domain.max, domain.min + Math.ceil((domain.max - domain.min) / (domain.step * 2)) * domain.step), domain.max]
+  const line = weeks.map((week, index) => `${index ? 'L' : 'M'} ${xFor(index).toFixed(2)} ${yFor(week.mean).toFixed(2)}`).join(' ')
+  const highlighted = activePoint ? weeks[activePoint.weekIndex].points[activePoint.pointIndex] : null
+  const tooltipWeek = activePoint ? weeks[activePoint.weekIndex] : activeWeek === null ? null : weeks[activeWeek]
+  const tooltipLeftIndex = activePoint?.weekIndex ?? activeWeek ?? 0
+
+  return (
+    <div ref={containerRef} className="weekly-stat-chart" style={{ height }}>
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={ariaLabel}>
+        <title>{ariaLabel}</title>
+        <desc>{`Weekly means with standard deviation bands across ${weeks.length} weeks.`}</desc>
+        {ticks.map((tick, index) => {
+          const y = yFor(tick)
+          return (
+            <g key={`${tick}-${index}`}>
+              <line x1={margin.left} y1={y} x2={width - margin.right} y2={y} className="chart-gridline" />
+              <text x={margin.left - 9} y={y + 3} textAnchor="end" className="chart-tick">{formatter(tick)}</text>
+            </g>
+          )
+        })}
+        {weeks.map((week, index) => {
+          const x = xFor(index)
+          const bandTop = yFor(week.mean + week.sd)
+          const bandBottom = yFor(week.mean - week.sd)
+          const bandHeight = Math.max(4, bandBottom - bandTop)
+          return (
+            <g key={week.key}>
+              <rect
+                x={x - 16}
+                y={bandTop}
+                width={32}
+                height={bandHeight}
+                rx={8}
+                fill={color}
+                fillOpacity={0.18}
+                className="weekly-band-hit"
+                onPointerEnter={() => {
+                  setActivePoint(null)
+                  setActiveWeek(index)
+                }}
+                onPointerLeave={() => setActiveWeek(null)}
+              />
+              <line x1={x - 18} y1={yFor(week.mean)} x2={x + 18} y2={yFor(week.mean)} stroke={color} strokeWidth="2.6" strokeLinecap="round" />
+              {week.points.map((point, pointIndex) => (
+                <g
+                  key={`${week.key}-${point.date}`}
+                  onPointerEnter={() => {
+                    setActiveWeek(index)
+                    setActivePoint({ weekIndex: index, pointIndex: pointIndex })
+                  }}
+                  onPointerLeave={() => setActivePoint(null)}
+                >
+                  {!point.withinSd && <circle cx={x} cy={yFor(point.value)} r={8.2} fill={alertColor} opacity={0.18} />}
+                  <circle
+                    cx={x}
+                    cy={yFor(point.value)}
+                    r={point.withinSd ? 4.2 : 5.6}
+                    fill={point.withinSd ? color : alertColor}
+                    stroke={point.withinSd ? 'var(--card)' : 'white'}
+                    strokeWidth={point.withinSd ? '1.6' : '2.2'}
+                    opacity={activePoint === null || (activePoint.weekIndex === index && activePoint.pointIndex === pointIndex) ? 0.98 : 0.82}
+                  >
+                    <title>{`${point.date}: ${formatter(point.value)}`}</title>
+                  </circle>
+                </g>
+              ))}
+              <text x={x} y={height - 9} textAnchor="middle" className="chart-label">{week.shortLabel}</text>
+              {week.isPartial && <text x={x} y={height - 22} textAnchor="middle" className="weekly-partial-label">partial</text>}
+            </g>
+          )
+        })}
+        <path d={line} fill="none" stroke={color} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+        {highlighted && activePoint && (
+          <g aria-hidden="true">
+            <line x1={xFor(activePoint.weekIndex)} y1={margin.top} x2={xFor(activePoint.weekIndex)} y2={height - margin.bottom} className="chart-hover-guide" />
+            <circle cx={xFor(activePoint.weekIndex)} cy={yFor(highlighted.value)} r={6} fill="var(--card)" stroke={highlighted.withinSd ? color : alertColor} strokeWidth="3" />
+          </g>
+        )}
+      </svg>
+      {tooltipWeek && (
+        <div
+          className="chart-tooltip weekly-tooltip"
+          style={{ left: `clamp(92px, ${xFor(tooltipLeftIndex) / width * 100}%, calc(100% - 92px))`, top: `${(margin.top + 18) / height * 100}%` }}
+          role="status"
+        >
+          <span>{tooltipWeek.label}</span>
+          <strong>Mean {formatter(tooltipWeek.mean)}</strong>
+          <small>SD {formatter(tooltipWeek.sd)} · n={tooltipWeek.sampleCount}</small>
+          {highlighted && activePoint?.weekIndex === tooltipLeftIndex && <small>{`${highlighted.date}: ${formatter(highlighted.value)}`}</small>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function ScatterRegressionChart({
+  points,
+  xLabel,
+  yLabel,
+  xFormatter = (value: number) => formatNumber(value),
+  yFormatter = (value: number) => formatNumber(value),
+  color = 'var(--color-indigo)',
+  height = 260,
+}: {
+  points: Array<{ x: number; y: number; label: string }>
+  xLabel: string
+  yLabel: string
+  xFormatter?: (value: number) => string
+  yFormatter?: (value: number) => string
+  color?: string
+  height?: number
+}) {
+  const [activeIndex, setActiveIndex] = useState<number | null>(null)
+  const { containerRef, width } = useResponsiveChartWidth(points.length > 0)
+  if (points.length < 2) return <div className="chart-empty" style={{ height }}>Need at least 2 paired observations</div>
+
+  const xs = points.map((point) => point.x)
+  const ys = points.map((point) => point.y)
+  const xDomain = lineDomain(xs, null)
+  const yDomain = lineDomain(ys, null)
+  const margin = { top: 16, right: 14, bottom: 42, left: 62 }
+  const plotWidth = width - margin.left - margin.right
+  const plotHeight = height - margin.top - margin.bottom
+  const xFor = (value: number) => margin.left + ((value - xDomain.min) / Math.max(1, xDomain.max - xDomain.min)) * plotWidth
+  const yFor = (value: number) => margin.top + ((yDomain.max - value) / Math.max(1, yDomain.max - yDomain.min)) * plotHeight
+  const meanX = xs.reduce((sum, value) => sum + value, 0) / xs.length
+  const meanY = ys.reduce((sum, value) => sum + value, 0) / ys.length
+  const covariance = points.reduce((sum, point) => sum + ((point.x - meanX) * (point.y - meanY)), 0)
+  const varianceX = xs.reduce((sum, value) => sum + ((value - meanX) ** 2), 0)
+  const slope = varianceX === 0 ? 0 : covariance / varianceX
+  const intercept = meanY - slope * meanX
+  const regressionStart = { x: xDomain.min, y: intercept + slope * xDomain.min }
+  const regressionEnd = { x: xDomain.max, y: intercept + slope * xDomain.max }
+  const xTicks = [xDomain.min, Math.min(xDomain.max, xDomain.min + Math.ceil((xDomain.max - xDomain.min) / (xDomain.step * 2)) * xDomain.step), xDomain.max]
+  const yTicks = [yDomain.min, Math.min(yDomain.max, yDomain.min + Math.ceil((yDomain.max - yDomain.min) / (yDomain.step * 2)) * yDomain.step), yDomain.max]
+  const active = activeIndex === null ? null : points[activeIndex]
+
+  return (
+    <div ref={containerRef} className="scatter-regression-chart" style={{ height }}>
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${xLabel} versus ${yLabel}`}>
+        <title>{`${xLabel} versus ${yLabel}`}</title>
+        {yTicks.map((tick, index) => (
+          <g key={`y-${tick}-${index}`}>
+            <line x1={margin.left} y1={yFor(tick)} x2={width - margin.right} y2={yFor(tick)} className="chart-gridline" />
+            <text x={margin.left - 10} y={yFor(tick) + 3} textAnchor="end" className="chart-tick">{yFormatter(tick)}</text>
+          </g>
+        ))}
+        {xTicks.map((tick, index) => (
+          <text key={`x-${tick}-${index}`} x={xFor(tick)} y={height - 10} textAnchor="middle" className="chart-label">{xFormatter(tick)}</text>
+        ))}
+        <line x1={margin.left} y1={height - margin.bottom} x2={width - margin.right} y2={height - margin.bottom} className="chart-baseline" />
+        <line x1={margin.left} y1={margin.top} x2={margin.left} y2={height - margin.bottom} className="chart-baseline" />
+        <line x1={xFor(regressionStart.x)} y1={yFor(regressionStart.y)} x2={xFor(regressionEnd.x)} y2={yFor(regressionEnd.y)} className="scatter-regression-line" stroke={color} />
+        {points.map((point, index) => (
+          <circle
+            key={`${point.label}-${index}`}
+            cx={xFor(point.x)}
+            cy={yFor(point.y)}
+            r={activeIndex === index ? 5.5 : 4.3}
+            fill={color}
+            stroke="var(--card)"
+            strokeWidth="1.8"
+            opacity={activeIndex === null || activeIndex === index ? 0.94 : 0.7}
+            onPointerEnter={() => setActiveIndex(index)}
+            onPointerLeave={() => setActiveIndex(null)}
+          />
+        ))}
+        <text x={width / 2} y={height - 2} textAnchor="middle" className="chart-axis-title">{xLabel}</text>
+        <text transform={`translate(16 ${height / 2}) rotate(-90)`} textAnchor="middle" className="chart-axis-title">{yLabel}</text>
+      </svg>
+      {active && (
+        <div
+          className="chart-tooltip"
+          style={{ left: `clamp(72px, ${xFor(active.x) / width * 100}%, calc(100% - 72px))`, top: `${yFor(active.y) / height * 100}%` }}
+          role="status"
+        >
+          <span>{active.label}</span>
+          <strong>{`${xLabel}: ${xFormatter(active.x)}`}</strong>
+          <small>{`${yLabel}: ${yFormatter(active.y)}`}</small>
+        </div>
+      )}
     </div>
   )
 }

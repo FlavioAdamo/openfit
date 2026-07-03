@@ -26,6 +26,8 @@ export function hasHealthData(data: DashboardData) {
     health.skinTemperature,
     health.coreTemperature,
     health.cardioScore,
+    health.strain,
+    health.recoveryScore,
     health.bloodGlucoseMgDl,
     health.irregularRhythmAlerts,
   ].some(hasNumber) || Boolean(health.vo2Max || health.ecgClassification) || health.heartRateIntraday.length > 0
@@ -34,6 +36,7 @@ export function hasHealthData(data: DashboardData) {
 export function hasSleepData(data: DashboardData) {
   return hasNumber(data.sleep.totalMinutes)
     || hasNumber(data.sleep.score)
+    || hasNumber(data.sleep.performance)
     || data.sleep.stages.some((stage) => stage.minutes > 0)
 }
 
@@ -74,9 +77,12 @@ export function availableMetricCount(data: DashboardData) {
     data.health.skinTemperature,
     data.health.coreTemperature,
     data.health.cardioScore,
+    data.health.strain,
+    data.health.recoveryScore,
     data.health.bloodGlucoseMgDl,
     data.sleep.totalMinutes,
     data.sleep.score,
+    data.sleep.performance,
     data.body.weightKg,
     data.body.bmi,
     data.body.bodyFat,

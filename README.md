@@ -4,7 +4,7 @@
 
 <h1 align="center">OpenFit</h1>
 
-OpenFit is a private, desktop-first Electron dashboard for Google Fitbit Air and other Fitbit devices. Its adaptive interface prioritizes a small set of useful insights and only displays views, metrics, and navigation when Google Health returns real data.
+OpenFit is a private, desktop-first Electron dashboard for Google Fitbit Air, WHOOP, and compatible health providers. Its adaptive interface prioritizes a small set of useful insights and only displays views, metrics, and navigation when the connected provider returns real data.
 
 <p align="center">
   <img src="public/openfit-screenshot.webp" alt="OpenFit desktop dashboard screenshot" width="960">
@@ -135,6 +135,32 @@ Do not commit or share these credentials. During authorization, OpenFit starts a
 
 The connection is working when OpenFit shows **Google Health** instead of **Demo mode**, displays a last synchronization time, and begins showing real device and health metrics. Metric availability depends on the device, region, granted consent, and recent Fitbit mobile synchronization.
 
+## Connect WHOOP
+
+OpenFit uses the official WHOOP API with read-only OAuth consent. Create an app in the [WHOOP Developer Dashboard](https://developer.whoop.com/) and configure this exact redirect URL:
+
+```text
+http://127.0.0.1:42813/oauth/callback
+```
+
+Request these scopes:
+
+```text
+offline
+read:profile
+read:body_measurement
+read:cycles
+read:recovery
+read:sleep
+read:workout
+```
+
+In OpenFit, open **Settings**, select **WHOOP**, paste the Client ID and Client Secret, confirm the callback URL, and click **Save and connect**. The system browser handles WHOOP consent, OpenFit captures the loopback callback locally, and the first sync starts automatically.
+
+OpenFit maps equivalent WHOOP metrics into the existing dashboard fields first: SpO2 becomes oxygen saturation, HRV remains HRV, respiratory rate remains breathing rate, and sleep/workout metrics use the existing Sleep and Activity views. WHOOP-specific recovery and strain appear only where OpenFit has no existing equivalent.
+
+For the full setup walkthrough, see [WHOOP setup](docs/WHOOP_SETUP.md).
+
 ### Security note
 
 The Client Secret, OAuth tokens, and health cache stay in Electron's main process and are encrypted with `safeStorage` using Keychain on macOS, Credential Manager on Windows, or an available secret store on Linux. They are not exposed to the renderer or written to the repository.
@@ -143,37 +169,39 @@ A Client Secret distributed in a desktop binary is not a durable global secret. 
 
 ### Troubleshooting
 
-`redirect_uri_mismatch`
+WHOOP callback rejected or callback mismatch
 
 - Register `http://127.0.0.1:42813/oauth/callback` exactly. Do not use `localhost`, omit the path, or add a trailing slash.
-
-`Access blocked`, `access_denied`, or unauthorized user
-
-- Confirm that the OAuth audience is **External**.
-- Add the correct account under **Audience -> Test users**.
-- Sign in with the same account used by the Fitbit app.
+- Keep the WHOOP developer app callback and the OpenFit callback identical.
 
 `invalid_client`
 
-- Copy the Client ID and Client Secret again from the same OAuth client.
+- Copy the Client ID and Client Secret again from the same WHOOP developer app.
 - Remove accidental leading or trailing spaces.
-- Do not mix credentials from different Cloud projects.
+- Do not mix credentials from different WHOOP apps.
 
-HTTP 403 or API not enabled
+Wrong WHOOP app credentials
 
-- Confirm that Google Health API is enabled in the same project as the OAuth client.
+- Make sure the Client ID, Client Secret, and registered callback all belong to the same WHOOP app entry.
 
 Port `42813` is already in use
 
 - Close other OpenFit processes and retry. Only one OAuth flow can use the callback port at a time.
 
-Some metrics are missing
+The browser approves access but OpenFit does not reconnect
 
-- Open the Fitbit app on the phone and wait for the tracker to synchronize.
+- Keep OpenFit open during the full consent flow.
+- Check whether a VPN, proxy, firewall rule, or local security tool is interfering with `127.0.0.1`.
+- Retry without changing the callback URL.
+
+OpenFit connects but WHOOP data still looks missing
+
+- Open the WHOOP app first and confirm the account already has recent data.
 - Return to OpenFit and click **Sync**.
-- ECG, SpO2, skin temperature, HRV, and irregular-rhythm notifications may not be available for every device, account, or country. OpenFit hides sections for which no data exists.
+- Check recent dates first.
+- Remember that WHOOP values may appear under existing OpenFit labels such as oxygen saturation, HRV, sleep, and activity.
 
-For a longer checklist, see [Google Health setup](docs/GOOGLE_HEALTH_SETUP.md).
+For a longer checklist, see [WHOOP setup](docs/WHOOP_SETUP.md).
 
 ## Project structure
 
@@ -196,6 +224,7 @@ docs/
   ARCHITECTURE.md             System decisions and boundaries
   DATA_COVERAGE.md            Data coverage and limitations
   GOOGLE_HEALTH_SETUP.md      Extended OAuth setup guide
+  WHOOP_SETUP.md              Extended WHOOP OAuth setup guide
   RELEASE.md                  Signing, notarization, and release process
 ```
 

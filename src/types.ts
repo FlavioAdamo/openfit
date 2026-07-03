@@ -1,12 +1,19 @@
 export type PageId = 'today' | 'activity' | 'health' | 'sleep' | 'body' | 'devices'
+export type AnalysisMode = 'daily' | 'weekly' | 'monthly'
+export type AgeEstimateReadiness = 'insufficient' | 'stabilizing' | 'ready'
 
-export type DataSource = 'demo' | 'fitbit' | 'google-health' | 'cache'
+export type DataSource = 'demo' | 'fitbit' | 'google-health' | 'whoop' | 'cache'
 
-export type HealthProvider = 'google-health' | 'fitbit-legacy'
+export type HealthProvider = 'google-health' | 'fitbit-legacy' | 'whoop'
 
 export interface TimePoint {
   time: string
   value: number
+}
+
+export interface AnalysisRange {
+  startDate: string
+  endDate: string
 }
 
 export interface TrendPoint {
@@ -26,6 +33,9 @@ export interface TrendPoint {
   skinTemperature: number | null
   coreTemperature: number | null
   cardioScore: number | null
+  strain: number | null
+  recoveryScore: number | null
+  sleepPerformance: number | null
   sleepMinutes: number | null
   sleepScore: number | null
   sleepEfficiency: number | null
@@ -44,10 +54,85 @@ export interface ActivityItem {
   calories: number | null
   distanceKm: number | null
   averageHeartRate: number | null
+  strain: number | null
   zoneMinutes: number | null
   steps: number | null
   averagePaceSecondsPerMeter: number | null
   heartZoneMinutes: HeartZoneMinutes | null
+}
+
+export interface WeeklyPoint {
+  date: string
+  label: string
+  value: number
+  withinSd: boolean
+}
+
+export interface DerivedMetricPoint {
+  date: string
+  value: number
+}
+
+export interface PhysiologicalAgePoint extends DerivedMetricPoint {
+  sampleCount: number
+  windowStart: string
+  windowEnd: string
+  readiness: AgeEstimateReadiness
+}
+
+export interface PhysiologicalAgeEstimate {
+  value: number | null
+  sampleCount: number
+  windowStart: string | null
+  windowEnd: string | null
+  readiness: AgeEstimateReadiness
+  series: PhysiologicalAgePoint[]
+}
+
+export interface WeeklyAggregate {
+  key: string
+  weekStart: string
+  weekEnd: string
+  label: string
+  shortLabel: string
+  isPartial: boolean
+  sampleCount: number
+  mean: number
+  sd: number
+  min: number
+  max: number
+  points: WeeklyPoint[]
+}
+
+export interface SportGroupSummary {
+  sport: string
+  activityCount: number
+  weeksActive: number
+  averageSessionsPerWeek: number
+  averageDurationMinutes: number | null
+  averageHeartRate: number | null
+  averageCalories: number | null
+  averageStrain: number | null
+}
+
+export interface SportZonePercentage {
+  label: 'Light' | 'Moderate' | 'Vigorous' | 'Peak'
+  percentage: number
+}
+
+export interface DistributionBin {
+  label: string
+  percentage: number
+  count: number
+}
+
+export interface SportDetailSummary extends SportGroupSummary {
+  sessions: ActivityItem[]
+  weeklyDuration: WeeklyAggregate[]
+  weeklyHeartRate: WeeklyAggregate[]
+  durationDistribution: DistributionBin[]
+  heartRateDistribution: DistributionBin[]
+  zonePercentages: SportZonePercentage[]
 }
 
 export type SleepStageKey = 'deep' | 'light' | 'rem' | 'wake'
@@ -139,6 +224,8 @@ export interface DashboardData {
     coreTemperature: number | null
     vo2Max: string | null
     cardioScore: number | null
+    strain: number | null
+    recoveryScore: number | null
     ecgClassification: string | null
     bloodGlucoseMgDl: number | null
     irregularRhythmAlerts: number | null
@@ -147,6 +234,7 @@ export interface DashboardData {
     totalMinutes: number | null
     goalMinutes: number | null
     score: number | null
+    performance: number | null
     efficiency: number | null
     startTime: string | null
     endTime: string | null
@@ -184,7 +272,7 @@ export interface DashboardData {
 }
 
 export interface RawFitbitPayload {
-  source: 'fitbit' | 'google-health'
+  source: 'fitbit' | 'google-health' | 'whoop'
   date: string
   generatedAt: string
   cacheHit?: boolean

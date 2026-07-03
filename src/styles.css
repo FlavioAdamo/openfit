@@ -1323,6 +1323,14 @@ input:focus-visible,
   .heart-kpis { align-items: flex-start; flex-wrap: wrap; gap: 15px 24px; }
   .sleep-stage-legend { grid-template-columns: 1fr; }
   .weight-goal-copy { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .sport-summary-row,
+  .section-title { align-items: flex-start; }
+  .sport-summary-row { flex-direction: column; }
+  .sport-summary-stats { justify-content: flex-start; }
+  .sport-detail-layout,
+  .sport-detail-charts,
+  .relationship-layout,
+  .relationship-controls { grid-template-columns: 1fr; }
 }
 
 /* Docked health assistant: assistant-ui primitives, styled in OpenFit's quiet system. */
@@ -2018,6 +2026,189 @@ input:focus-visible,
 
 .chart-tooltip span { color: var(--muted-foreground); }
 .chart-tooltip strong { color: var(--foreground); font-family: var(--font-mono); font-size: 13px; font-weight: 600; white-space: nowrap; }
+.chart-tooltip small { color: var(--muted-foreground); font-size: 12px; white-space: nowrap; }
+
+.weekly-stat-chart { position: relative; overflow: visible; }
+.weekly-stat-chart > svg { touch-action: pan-y; }
+.weekly-band-hit { cursor: crosshair; }
+.weekly-partial-label { fill: var(--muted-foreground); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+.weekly-tooltip { min-width: 126px; }
+.scatter-regression-line { stroke-width: 2.4; stroke-linecap: round; opacity: 0.88; }
+.chart-axis-title { fill: var(--muted-foreground); font-size: 12px; }
+
+.analysis-toggle {
+  display: inline-grid;
+  grid-auto-flow: column;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--card) 90%, transparent);
+}
+
+.analysis-toggle-button {
+  min-width: 68px;
+  padding: 7px 11px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  background: transparent;
+  font-size: 13px;
+}
+
+.analysis-toggle-button.is-active {
+  color: var(--foreground);
+  background: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.sport-summary-panel { padding: 4px 18px; }
+.sport-summary-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; }
+.sport-summary-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.sport-summary-copy strong { color: var(--foreground); font-size: 15px; font-weight: 560; }
+.sport-summary-copy span { color: var(--muted-foreground); font-size: 13px; }
+.sport-summary-stats { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; color: var(--foreground); font-size: 13px; }
+.sport-summary-stats span {
+  padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 68%, transparent);
+}
+
+.sport-detail-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.42fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.sport-selector-panel { padding: 14px; }
+.sport-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sport-selector-item {
+  display: flex;
+  min-height: 58px;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 13px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--foreground);
+  background: transparent;
+  text-align: left;
+}
+
+.sport-selector-item strong { font-size: 14px; font-weight: 560; }
+.sport-selector-item span { color: var(--muted-foreground); font-size: 13px; }
+.sport-selector-item.is-active {
+  border-color: color-mix(in srgb, var(--category-activity) 34%, var(--border));
+  background: color-mix(in srgb, var(--category-activity) 8%, transparent);
+}
+
+.sport-detail-panel { padding: 18px; }
+.sport-detail-meta { margin: 0 0 14px; }
+.sport-detail-meta span { display: block; margin-bottom: 5px; color: var(--muted-foreground); font-size: 13px; }
+.sport-detail-meta strong { color: var(--foreground); font-size: 14px; line-height: 1.5; }
+.sport-detail-charts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+
+.relationship-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.relationship-matrix-panel,
+.relationship-scatter-panel { padding: 18px; }
+.relationship-item-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.relationship-summary-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.relationship-model-copy {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.relationship-model-copy p {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.relationship-driver-list { display: grid; gap: 12px; }
+.relationship-driver-list.compact { gap: 8px; }
+.relationship-driver-row {
+  display: grid;
+  gap: 6px;
+  padding: 12px 0;
+}
+.relationship-driver-row.compact { padding: 8px 0; }
+.relationship-driver-row + .relationship-driver-row { border-top: 1px solid var(--border); }
+.relationship-impact-bar {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 70%, transparent);
+}
+.relationship-impact-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+.relationship-impact-fill.is-positive { background: color-mix(in srgb, var(--color-emerald) 86%, black); }
+.relationship-impact-fill.is-negative { background: color-mix(in srgb, var(--color-crimson) 82%, black); }
+.relationship-model-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+.relationship-model-card { padding: 18px; }
+
+.metric-select { display: flex; min-width: 0; flex-direction: column; gap: 6px; }
+.metric-select span { color: var(--muted-foreground); font-size: 13px; }
+.metric-select select {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--foreground);
+  background: var(--card);
+  font-size: 13px;
+}
+
+.relationship-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+.correlation-matrix { display: grid; gap: 8px; overflow-x: auto; }
+.correlation-header-row,
+.correlation-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.9fr) repeat(8, minmax(86px, 1fr));
+  gap: 8px;
+  align-items: stretch;
+}
+.correlation-header-row span,
+.correlation-row strong {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.correlation-row strong { display: flex; align-items: center; font-weight: 560; }
+.correlation-cell {
+  display: grid;
+  min-height: 42px;
+  place-items: center;
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.correlation-cell.is-empty { color: var(--muted-foreground); background: color-mix(in srgb, var(--accent) 42%, transparent); }
+.correlation-cell.is-neutral { color: var(--foreground); background: color-mix(in srgb, var(--accent) 72%, transparent); }
+.correlation-cell.is-positive { color: white; background: color-mix(in srgb, var(--category-activity) 62%, black); }
+.correlation-cell.is-strong-positive { color: white; background: color-mix(in srgb, var(--color-emerald) 76%, black); }
+.correlation-cell.is-negative { color: white; background: color-mix(in srgb, var(--color-coral) 62%, black); }
+.correlation-cell.is-strong-negative { color: white; background: color-mix(in srgb, var(--color-crimson) 78%, black); }
 
 .chart-range-labels {
   position: absolute;
@@ -3124,4 +3315,201 @@ input:focus-visible,
   .sleep-timeline-card { padding-inline: 14px; }
   .sleep-timeline-label,
   .sleep-timeline-time { font-size: 11px; }
+}
+
+/* Shared analysis window controls and full-width statistical stacks. */
+.analysis-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px 12px;
+}
+
+.analysis-range-popover {
+  position: relative;
+}
+
+.analysis-range-popover[open] {
+  z-index: 5;
+}
+
+.analysis-range-summary {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  list-style: none;
+}
+
+.analysis-range-summary::-webkit-details-marker {
+  display: none;
+}
+
+.analysis-range-summary span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.analysis-range-summary strong {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 450;
+}
+
+.analysis-range-summary svg {
+  width: 14px;
+  height: 14px;
+  color: var(--muted-foreground);
+}
+
+.analysis-range-controls {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  display: grid;
+  min-width: 278px;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card);
+  box-shadow: var(--shadow-overlay);
+}
+
+.analysis-range-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.analysis-range-field span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.analysis-range-field input {
+  min-height: 36px;
+  min-width: 146px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--foreground);
+  background: var(--card);
+  font-size: 13px;
+}
+
+.analysis-range-reset {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--accent) 72%, transparent);
+  font-size: 13px;
+}
+
+.physiology-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.physiology-grid > .panel {
+  min-height: 252px;
+}
+
+.activity-page .metric-trend-grid {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 16px;
+  align-items: stretch;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.activity-page .metric-trend-grid > .panel {
+  flex: 0 0 min(360px, calc(50vw - 64px));
+  min-width: 320px;
+}
+
+.activity-page .metric-trend-grid > .panel:only-child {
+  flex: 1 1 auto;
+  min-width: min(100%, 760px);
+}
+
+.sport-detail-layout-single {
+  grid-template-columns: 1fr;
+}
+
+.sport-picker {
+  min-width: 220px;
+}
+
+.sport-picker select {
+  min-width: 220px;
+}
+
+.age-estimate-caption {
+  margin: 10px 0 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+@media (max-width: 980px) {
+  .analysis-controls {
+    align-items: stretch;
+    justify-content: flex-start;
+  }
+
+  .activity-page .metric-trend-grid {
+    gap: 14px;
+  }
+}
+
+@media (max-width: 720px) {
+  .analysis-controls,
+  .analysis-range-popover {
+    width: 100%;
+  }
+
+  .analysis-range-summary,
+  .analysis-range-controls,
+  .sport-picker,
+  .sport-picker select,
+  .physiology-grid {
+    width: 100%;
+  }
+
+  .analysis-range-controls {
+    flex-direction: column;
+    right: auto;
+    left: 0;
+    min-width: 100%;
+  }
+
+  .analysis-range-field input,
+  .analysis-range-reset {
+    width: 100%;
+  }
+
+  .physiology-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .activity-page .metric-trend-grid {
+    gap: 12px;
+  }
+
+  .activity-page .metric-trend-grid > .panel {
+    flex-basis: min(86vw, 320px);
+    min-width: 260px;
+  }
 }

@@ -30,9 +30,10 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import type { DashboardData, FitbitAuthStatus, FitbitConfigInput, HealthProvider, PageId } from '@/types'
+import type { AnalysisMode, AnalysisRange, DashboardData, FitbitAuthStatus, FitbitConfigInput, HealthProvider, PageId } from '@/types'
 import { createDemoData, localIso } from '@/data/demo'
 import { normalizeFitbitData } from '@/data/normalize'
+import { clampAnalysisRange, defaultAnalysisRange, filterDashboardDataByRange } from '@/lib/analysis-window'
 import { formatDate, relativeTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { ActivityView, BodyView, DevicesView, HealthView, SleepView, TodayView } from '@/components/Views'
@@ -85,6 +86,16 @@ const defaultStatus: FitbitAuthStatus = {
   provider: 'google-health',
 }
 
+function providerDisplayName(provider: HealthProvider) {
+  if (provider === 'fitbit-legacy') return 'Fitbit legacy'
+  if (provider === 'whoop') return 'WHOOP'
+  return 'Google Health'
+}
+
+function defaultRedirectForProvider(provider: HealthProvider) {
+  return 'http://127.0.0.1:42813/oauth/callback'
+}
+
 interface ToastState {
   tone: 'success' | 'error' | 'neutral'
   message: string
@@ -118,6 +129,8 @@ export default function App() {
   const [status, setStatus] = useState(defaultStatus)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [assistantOpen, setAssistantOpen] = useState(false)
+  const [analysisMode, setAnalysisMode] = useState<AnalysisMode>('daily')
+  const [analysisRange, setAnalysisRange] = useState<AnalysisRange | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [syncTargetDate, setSyncTargetDate] = useState<string | null>(null)
   const [connecting, setConnecting] = useState(false)
@@ -140,6 +153,22 @@ export default function App() {
   useEffect(() => {
     dataDateRef.current = data.selectedDate
   }, [data.selectedDate])
+
+  const defaultRange = useMemo(() => defaultAnalysisRange(data.trends, data.selectedDate), [data.selectedDate, data.trends])
+  const normalizedAnalysisRange = useMemo(
+    () => clampAnalysisRange(analysisRange ?? defaultRange, data.trends, data.selectedDate),
+    [analysisRange, data.selectedDate, data.trends, defaultRange],
+  )
+  const analysisData = useMemo(
+    () => filterDashboardDataByRange(data, normalizedAnalysisRange),
+    [data, normalizedAnalysisRange],
+  )
+
+  useEffect(() => {
+    if (!analysisRange || analysisRange.startDate !== normalizedAnalysisRange.startDate || analysisRange.endDate !== normalizedAnalysisRange.endDate) {
+      setAnalysisRange(normalizedAnalysisRange)
+    }
+  }, [analysisRange, normalizedAnalysisRange])
 
   const loadNativeState = useCallback(async () => {
     if (!window.fitbit) return
@@ -322,7 +351,7 @@ export default function App() {
 
   const exportData = async () => {
     if (!window.fitbit || data.source === 'demo') {
-      setToast({ tone: 'neutral', message: 'Connect Google Health to export real data.' })
+      setToast({ tone: 'neutral', message: 'Connect a health provider to export real data.' })
       return
     }
     const result = await window.fitbit.exportData()
@@ -330,18 +359,28 @@ export default function App() {
   }
 
   const currentView = useMemo(() => {
-    const props = { data, status, navigate: setPage }
+    const props = {
+      data,
+      analysisData,
+      status,
+      navigate: setPage,
+      analysisMode,
+      setAnalysisMode,
+      analysisRange: normalizedAnalysisRange,
+      defaultAnalysisRange: defaultRange,
+      setAnalysisRange,
+    }
     if (page === 'activity') return <ActivityView {...props} />
     if (page === 'health') return <HealthView {...props} />
     if (page === 'sleep') return <SleepView {...props} />
     if (page === 'body') return <BodyView {...props} />
     if (page === 'devices') return <DevicesView {...props} />
     return <TodayView {...props} />
-  }, [data, page, status])
+  }, [analysisData, analysisMode, data, defaultRange, normalizedAnalysisRange, page, status])
 
   const isToday = selectedDate === localIso()
   const sourceLabel = status.connected
-    ? status.provider === 'fitbit-legacy' ? 'Fitbit legacy' : 'Google Health'
+    ? providerDisplayName(status.provider)
     : data.source === 'demo' ? 'Demo data' : 'Local cache'
   const pageMeta = navItems.find((item) => item.id === page) ?? navItems[0]
   const loadingSelectedDate = syncing && data.selectedDate !== selectedDate
@@ -441,7 +480,7 @@ export default function App() {
                 </IconButton>
               </>
             ) : (
-              <Button className="connect-button" aria-label={`Connect ${status.provider === 'fitbit-legacy' ? 'Fitbit legacy' : 'Google Health'}`} onClick={connect} disabled={connecting}>
+              <Button className="connect-button" aria-label={`Connect ${providerDisplayName(status.provider)}`} onClick={connect} disabled={connecting}>
                 {connecting ? <LoaderIcon className="spin" /> : <CloudIcon />}<span>Connect</span>
               </Button>
             )}
@@ -673,13 +712,18 @@ function SettingsDialog({
     setEditing(!status.configured)
   }, [open, status])
 
-  const secretRequired = provider === 'google-health'
-  const providerLabel = provider === 'google-health' ? 'Google Health' : 'Fitbit legacy'
+  useEffect(() => {
+    if (!open) return
+    if (!status.configured || status.provider !== provider) setRedirectUri(defaultRedirectForProvider(provider))
+  }, [open, provider, status.configured, status.provider])
+
+  const secretRequired = provider === 'google-health' || provider === 'whoop'
+  const providerLabel = providerDisplayName(provider)
   const savedSecretMatchesProvider = status.hasClientSecret && status.provider === provider
   const canSave = status.storageEncrypted
     && clientId.trim().length > 2
     && (!secretRequired || clientSecret.trim().length > 4 || savedSecretMatchesProvider)
-    && redirectUri.startsWith('http://127.0.0.1:')
+    && (provider === 'whoop' ? (redirectUri.startsWith('http://127.0.0.1:') || redirectUri.startsWith('https://')) : redirectUri.startsWith('http://127.0.0.1:'))
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
@@ -695,7 +739,9 @@ function SettingsDialog({
   const openDeveloperPortal = () => {
     const url = provider === 'google-health'
       ? 'https://console.cloud.google.com/apis/library/health.googleapis.com'
-      : 'https://dev.fitbit.com/apps/new'
+      : provider === 'whoop'
+        ? 'https://developer.whoop.com/'
+        : 'https://dev.fitbit.com/apps/new'
     if (window.fitbit) void window.fitbit.openExternal(url)
     else window.open(url, '_blank', 'noopener,noreferrer')
   }
@@ -731,6 +777,10 @@ function SettingsDialog({
                 <input className="sr-only" type="radio" name="health-provider" value="fitbit-legacy" checked={provider === 'fitbit-legacy'} onChange={() => setProvider('fitbit-legacy')} />
                 <DeviceIcon /><span><strong>Fitbit legacy</strong><small>Temporary compatibility</small></span>{provider === 'fitbit-legacy' && <CheckIcon />}
               </label>
+              <label className={cn(provider === 'whoop' && 'active')}>
+                <input className="sr-only" type="radio" name="health-provider" value="whoop" checked={provider === 'whoop'} onChange={() => setProvider('whoop')} />
+                <ActivityIcon /><span><strong>WHOOP</strong><small>Recovery, strain, sleep</small></span>{provider === 'whoop' && <CheckIcon />}
+              </label>
             </div>
 
             <div className="form-field">
@@ -746,7 +796,7 @@ function SettingsDialog({
             <div className="form-field">
               <Label htmlFor="callback-url">Callback URL</Label>
               <Input id="callback-url" value={redirectUri} onChange={(event) => setRedirectUri(event.target.value)} spellCheck={false} />
-              <p>It must exactly match the URL configured in Google Cloud.</p>
+              <p>{provider === 'whoop' ? 'Register http://127.0.0.1:42813/oauth/callback exactly in the WHOOP Developer Dashboard. During connection, OpenFit listens on this local address for the OAuth callback.' : 'It must exactly match the loopback URL configured in the provider console.'}</p>
             </div>
 
             <button type="button" className="portal-link" onClick={openDeveloperPortal}>Open developer console <ExternalIcon /></button>

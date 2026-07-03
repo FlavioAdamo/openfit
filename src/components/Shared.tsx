@@ -2,6 +2,7 @@ import type { KeyboardEvent, ReactNode } from 'react'
 import { Card, CardAction, CardHeader } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 import { formatNumber } from '@/lib/format'
+import type { AnalysisMode, AnalysisRange } from '@/types'
 import type { AppIcon } from './icons'
 import { ChevronDownIcon, ChevronUpIcon, MinusIcon } from './icons'
 import { BulletChart } from './Charts'
@@ -132,4 +133,83 @@ export function Delta({ value, suffix = ' vs. previous period' }: { value: numbe
 
 export function EmptyValue({ children = 'Not available for this device or day.' }: { children?: ReactNode }) {
   return <div className="empty-value">{children}</div>
+}
+
+export function AnalysisModeToggle({
+  value,
+  onChange,
+}: {
+  value: AnalysisMode
+  onChange: (mode: AnalysisMode) => void
+}) {
+  return (
+    <div className="analysis-toggle" role="tablist" aria-label="Analysis mode">
+      {(['daily', 'weekly', 'monthly'] as const).map((mode) => (
+        <button
+          key={mode}
+          type="button"
+          role="tab"
+          aria-selected={value === mode}
+          className={cn('analysis-toggle-button', value === mode && 'is-active')}
+          onClick={() => onChange(mode)}
+        >
+          {mode === 'daily' ? 'Daily' : mode === 'weekly' ? 'Weekly' : 'Monthly'}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+export function AnalysisWindowControls({
+  mode,
+  onModeChange,
+  range,
+  defaultRange,
+  onRangeChange,
+  maxDate,
+}: {
+  mode: AnalysisMode
+  onModeChange: (mode: AnalysisMode) => void
+  range: AnalysisRange
+  defaultRange: AnalysisRange
+  onRangeChange: (range: AnalysisRange) => void
+  maxDate: string
+}) {
+  const rangeLabel = `${range.startDate} - ${range.endDate}`
+  return (
+    <div className="analysis-controls">
+      <AnalysisModeToggle value={mode} onChange={onModeChange} />
+      <details className="analysis-range-popover">
+        <summary className="analysis-range-summary">
+          <span>Window</span>
+          <strong>{rangeLabel}</strong>
+          <ChevronDownIcon aria-hidden="true" />
+        </summary>
+        <div className="analysis-range-controls">
+          <label className="analysis-range-field">
+            <span>From</span>
+            <input
+              type="date"
+              value={range.startDate}
+              max={range.endDate}
+              onChange={(event) => onRangeChange({ ...range, startDate: event.target.value })}
+            />
+          </label>
+          <label className="analysis-range-field">
+            <span>To</span>
+            <input
+              type="date"
+              value={range.endDate}
+              min={range.startDate}
+              max={maxDate}
+              onChange={(event) => onRangeChange({ ...range, endDate: event.target.value })}
+            />
+          </label>
+          <button type="button" className="analysis-range-reset" onClick={() => onRangeChange(defaultRange)}>
+            Latest 8w
+          </button>
+        </div>
+      </details>
+    </div>
+  )
 }
