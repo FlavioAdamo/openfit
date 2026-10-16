@@ -243,6 +243,8 @@ async function syncGoogleHealthData(accessToken, selectedDate, onProgress = () =
     ['coreTemperatureDaily', () => dailyRollup(accessToken, 'core-body-temperature', trendStart, dayAfter)],
     ['stepsIntradayRaw', () => listData(accessToken, 'steps', 'interval', selectedDate, dayAfter, 'google-wearables')],
     ['heartIntradayRaw', () => listData(accessToken, 'heart-rate', 'sample', selectedDate, dayAfter, 'google-wearables')],
+    ['hrvIntradayRaw', () => listData(accessToken, 'heart-rate-variability', 'sample', shiftIso(selectedDate, -1), dayAfter, 'google-wearables')],
+    ['spo2IntradayRaw', () => listData(accessToken, 'oxygen-saturation', 'sample', shiftIso(selectedDate, -1), dayAfter, 'google-wearables')],
     ['restingHeartRaw', () => listData(accessToken, 'daily-resting-heart-rate', 'daily', trendStart, dayAfter)],
     ['hrvRaw', () => listData(accessToken, 'daily-heart-rate-variability', 'daily', trendStart, dayAfter)],
     ['spo2Raw', () => listData(accessToken, 'daily-oxygen-saturation', 'daily', trendStart, dayAfter)],
@@ -303,6 +305,35 @@ function dailyRecordMap(payload, key, extractor) {
     const record = point[key]
     return [dateFromCivil(record?.date), extractor(record)]
   }).filter(([date]) => date))
+}
+
+// HRV and SpO2 samples are only recorded while asleep, so the "day" view is the
+// night that ends on the selected date: the main sleep session when one exists,
+// otherwise 18:00 the previous evening to 14:00 on the selected date.
+function nightSamples(payload, key, valueOf, sleep, selectedDate) {
+  const sleepStart = Date.parse(sleep?.startTime || '')
+  const sleepEnd = Date.parse(sleep?.endTime || '')
+  const padding = 30 * 60_000
+  const fallbackStart = `${shiftIso(selectedDate, -1)}T18:00`
+  const fallbackEnd = `${selectedDate}T14:00`
+  return dataPoints(payload).map((point) => {
+    const record = point[key] || {}
+    const date = dateFromCivil(record.sampleTime?.civilTime)
+    const time = timeFromCivil(record.sampleTime?.civilTime)
+    return {
+      time,
+      dateTime: date && time ? `${date}T${time}` : null,
+      physical: Date.parse(record.sampleTime?.physicalTime || ''),
+      value: numeric(valueOf(record)),
+    }
+  }).filter((point) => {
+    if (!point.dateTime || point.value === null) return false
+    if (Number.isFinite(sleepStart) && Number.isFinite(sleepEnd) && Number.isFinite(point.physical)) {
+      return point.physical >= sleepStart - padding && point.physical <= sleepEnd + padding
+    }
+    return point.dateTime >= fallbackStart && point.dateTime < fallbackEnd
+  }).sort((a, b) => a.dateTime.localeCompare(b.dateTime))
+    .map(({ time, dateTime, value }) => ({ time, dateTime, value }))
 }
 
 function selected(map, date) {
@@ -431,6 +462,8 @@ function translateGoogleHealth(raw, selectedDate) {
   const selectedSleep = selectedSleepRecords.find((item) => item.isMainSleep)
     || selectedSleepRecords.sort((a, b) => b.minutesAsleep - a.minutesAsleep)[0]
     || null
+  const hrvNight = nightSamples(raw.hrvIntradayRaw, 'heartRateVariability', (record) => record.rootMeanSquareOfSuccessiveDifferencesMilliseconds, selectedSleep, selectedDate)
+  const spo2Night = nightSamples(raw.spo2IntradayRaw, 'oxygenSaturation', (record) => record.percentage, selectedSleep, selectedDate)
   const allDates = [...new Set([
     ...steps.keys(),
     ...calories.keys(),
@@ -561,6 +594,8 @@ function translateGoogleHealth(raw, selectedDate) {
       'activities-heart': [{ dateTime: selectedDate, value: { restingHeartRate: selected(restingHeart, selectedDate) } }],
       'activities-heart-intraday': { dataset: heartPoints },
     },
+    hrvIntraday: { dataset: hrvNight },
+    spo2Intraday: { dataset: spo2Night },
     sleep: { sleep: selectedSleep ? [selectedSleep] : [] },
     sleepTrend: { sleep: sleepRecords },
     sleepGoal: { goal: {} },

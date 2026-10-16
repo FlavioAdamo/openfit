@@ -3,6 +3,7 @@ import type {
   ActivityItem,
   DashboardData,
   HeartZoneMinutes,
+  NightPoint,
   RawFitbitPayload,
   SleepStageCounts,
   SleepStageKey,
@@ -38,6 +39,13 @@ function readIntraday(input: unknown, key: string): TimePoint[] {
   return asArray(asObject(asObject(input)[key]).dataset)
     .map((point) => ({ time: String(point.time ?? '').slice(0, 5), value: Number(point.value) }))
     .filter((point) => point.time && Number.isFinite(point.value))
+}
+
+function readNight(input: unknown): NightPoint[] {
+  return asArray(asObject(input).dataset)
+    .map((point) => ({ time: String(point.time ?? '').slice(0, 5), dateTime: String(point.dateTime ?? '').slice(0, 16), value: Number(point.value) }))
+    .filter((point) => point.time && point.dateTime && Number.isFinite(point.value))
+    .sort((left, right) => left.dateTime.localeCompare(right.dateTime))
 }
 
 function compactIntraday(points: TimePoint[], maxPoints = 288): TimePoint[] {
@@ -321,6 +329,8 @@ export function normalizeFitbitData(payload: RawFitbitPayload): DashboardData {
       heartRateMin: heartValues.length ? Math.min(...heartValues) : null,
       heartRateMax: heartValues.length ? Math.max(...heartValues) : null,
       heartRateIntraday: heartPoints,
+      hrvNight: readNight(e.hrvIntraday),
+      spo2Night: readNight(e.spo2Intraday),
       hrvMs: firstNumber(hrvValue.dailyRmssd, hrvValue.deepRmssd),
       hrvDeepSleepRmssdMs: numeric(hrvValue.deepRmssd),
       hrvEntropy: numeric(hrvValue.entropy),

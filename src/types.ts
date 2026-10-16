@@ -9,6 +9,11 @@ export interface TimePoint {
   value: number
 }
 
+// A sample that can span midnight, so it keeps its civil date as well.
+export interface NightPoint extends TimePoint {
+  dateTime: string
+}
+
 export interface TrendPoint {
   date: string
   label: string
@@ -124,6 +129,8 @@ export interface DashboardData {
     heartRateMin: number | null
     heartRateMax: number | null
     heartRateIntraday: TimePoint[]
+    hrvNight: NightPoint[]
+    spo2Night: NightPoint[]
     hrvMs: number | null
     hrvDeepSleepRmssdMs: number | null
     hrvEntropy: number | null

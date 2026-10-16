@@ -156,4 +156,28 @@ describe('Google Health adapter', () => {
     expect(endpoints.activity.summary.fairlyActiveMinutes).toBeNull()
     expect(endpoints.activity.summary.veryActiveMinutes).toBeNull()
   })
+
+  it('keeps only overnight HRV and SpO2 samples for the night ending on the selected date', () => {
+    const sample = (physicalTime: string, date: string, hours: number, minutes: number) => ({
+      physicalTime,
+      civilTime: { date: civil(date).date, time: { hours, minutes } },
+    })
+    const endpoints = __test.translateGoogleHealth({
+      hrvIntradayRaw: { dataPoints: [
+        { heartRateVariability: { sampleTime: sample('2026-06-22T01:00:00Z', '2026-06-22', 3, 0), rootMeanSquareOfSuccessiveDifferencesMilliseconds: 41.2 } },
+        { heartRateVariability: { sampleTime: sample('2026-06-21T21:30:00Z', '2026-06-21', 23, 30), rootMeanSquareOfSuccessiveDifferencesMilliseconds: 37.1 } },
+        // The night before the selected one: outside the window.
+        { heartRateVariability: { sampleTime: sample('2026-06-21T01:00:00Z', '2026-06-21', 3, 0), rootMeanSquareOfSuccessiveDifferencesMilliseconds: 50 } },
+      ] },
+      spo2IntradayRaw: { dataPoints: [
+        { oxygenSaturation: { sampleTime: sample('2026-06-22T02:00:00Z', '2026-06-22', 4, 0), percentage: 94.8 } },
+      ] },
+    }, '2026-06-22')
+
+    expect(endpoints.hrvIntraday.dataset).toEqual([
+      { time: '23:30', dateTime: '2026-06-21T23:30', value: 37.1 },
+      { time: '03:00', dateTime: '2026-06-22T03:00', value: 41.2 },
+    ])
+    expect(endpoints.spo2Intraday.dataset).toEqual([{ time: '04:00', dateTime: '2026-06-22T04:00', value: 94.8 }])
+  })
 })

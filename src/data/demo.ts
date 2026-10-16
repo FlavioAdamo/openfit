@@ -1,4 +1,4 @@
-import type { ActivityItem, DashboardData, SleepStage, SleepStageKey, SleepStageSegment, TimePoint, TrendPoint } from '../types'
+import type { ActivityItem, DashboardData, NightPoint, SleepStage, SleepStageKey, SleepStageSegment, TimePoint, TrendPoint } from '../types'
 
 const dayMs = 86_400_000
 
@@ -63,6 +63,17 @@ function makeHeartSeries(): TimePoint[] {
       time: `${String(hours).padStart(2, '0')}:${minutes}`,
       value: Math.round(base + Math.sin(index * 0.7) * 5 + Math.max(0, training)),
     }
+  })
+}
+
+// Samples from 22:30 the previous evening to 06:30, like a watch records overnight.
+function makeNightSeries(selectedDate: string, stepMinutes: number, valueFor: (index: number) => number): NightPoint[] {
+  // dateFromIso returns noon, so noon minus 13.5 hours is 22:30 the previous day.
+  const start = dateFromIso(selectedDate).getTime() - 13.5 * 3_600_000
+  return Array.from({ length: Math.floor((8 * 60) / stepMinutes) }, (_, index) => {
+    const date = new Date(start + index * stepMinutes * 60_000)
+    const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+    return { time, dateTime: `${localIso(date)}T${time}`, value: valueFor(index) }
   })
 }
 
@@ -201,6 +212,8 @@ export function createDemoData(selectedDate = localIso()): DashboardData {
       heartRateMin: 53,
       heartRateMax: 171,
       heartRateIntraday,
+      hrvNight: makeNightSeries(selectedDate, 5, (index) => Math.round(((latest.hrvMs ?? 45) + Math.sin(index * 0.13) * 8 + Math.sin(index * 0.41) * 3) * 10) / 10),
+      spo2Night: makeNightSeries(selectedDate, 1, (index) => Math.round(((latest.spo2 ?? 97) + Math.sin(index * 0.015) * 0.9 + Math.sin(index * 0.07) * 0.4) * 10) / 10),
       hrvMs: latest.hrvMs,
       hrvDeepSleepRmssdMs: (latest.hrvMs ?? 0) + 7,
       hrvEntropy: 3.61,

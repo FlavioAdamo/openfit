@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
-import type { ActivityItem, DashboardData, FitbitAuthStatus, PageId, TimePoint } from '@/types'
+import type { ActivityItem, DashboardData, FitbitAuthStatus, NightPoint, PageId, TimePoint } from '@/types'
 import { BulletChart, ColumnChart, LineChart, RadialProgress, SleepStageBar, SleepStageTimeline } from './Charts'
 import { DuoIcon, EmptyValue, MetricTile, Panel, PanelHeader } from './Shared'
 import type { AppIcon } from './icons'
@@ -188,6 +188,29 @@ function trendXValues(data: DashboardData) {
     const value = new Date(`${point.date}T12:00:00`).getTime()
     return Number.isFinite(value) ? value : index
   })
+}
+
+// Night samples cross midnight, so x comes from the full civil date-time. A gap
+// longer than 15 minutes breaks the line instead of drawing across missing data.
+function nightSeries(points: NightPoint[]) {
+  const values: (number | null)[] = []
+  const labels: string[] = []
+  const xValues: number[] = []
+  let previous: number | null = null
+  for (const point of points) {
+    const x = new Date(point.dateTime).getTime()
+    if (!Number.isFinite(x)) continue
+    if (previous !== null && x - previous > 15 * 60_000) {
+      values.push(null)
+      labels.push(point.time)
+      xValues.push((previous + x) / 2)
+    }
+    values.push(point.value)
+    labels.push(point.time)
+    xValues.push(x)
+    previous = x
+  }
+  return { values, labels, xValues, count: points.length, range: points.length ? `${points[0].time}–${points.at(-1)!.time}` : '' }
 }
 
 function timeXValues(labels: string[]) {
@@ -656,6 +679,8 @@ export function HealthView({ data }: ViewProps) {
     data.trends.map((point) => point.cardioScore),
   ]
   const hasPhysiologyTrends = physiologyTrendValues.some((values) => values.filter(hasValue).length > 1)
+  const hrvNight = nightSeries(data.health.hrvNight)
+  const spo2Night = nightSeries(data.health.spo2Night)
 
   return (
     <div className="page-stack health-page">
@@ -681,6 +706,27 @@ export function HealthView({ data }: ViewProps) {
             />
           )}
         </Panel>
+      )}
+
+      {(hrvNight.count > 1 || spo2Night.count > 1) && (
+        <div className="health-grid">
+          {hrvNight.count > 1 && (
+            <section>
+              <SectionTitle title="HRV overnight" copy={`${hrvNight.count} samples · ${hrvNight.range}`} />
+              <Panel className="chart-panel compact-chart-panel" category="heart">
+                <LineChart values={hrvNight.values} labels={hrvNight.labels} xValues={hrvNight.xValues} color="var(--category-heart)" target={data.health.hrvMs} targetLabel="Nightly average" height={226} formatter={(value) => `${formatDecimal(value)} ms`} ariaLabel="Heart rate variability throughout the night" />
+              </Panel>
+            </section>
+          )}
+          {spo2Night.count > 1 && (
+            <section>
+              <SectionTitle title="SpO₂ overnight" copy={`${spo2Night.count} samples · ${spo2Night.range}`} />
+              <Panel className="chart-panel compact-chart-panel" category="heart">
+                <LineChart values={spo2Night.values} labels={spo2Night.labels} xValues={spo2Night.xValues} color="var(--category-heart)" target={data.health.spo2} targetLabel="Nightly average" height={226} formatter={(value) => `${formatDecimal(value)}%`} ariaLabel="Blood oxygen saturation throughout the night" />
+              </Panel>
+            </section>
+          )}
+        </div>
       )}
 
       <div className="health-grid">
