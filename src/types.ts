@@ -168,6 +168,9 @@ export interface DashboardData {
     caloriesIn: number | null
   }
   trends: TrendPoint[]
+  // Every merged day up to and including the selected date, oldest first.
+  history: TrendPoint[]
+  historyUpdatedAt: string | null
   activities: ActivityItem[]
   insights: Array<{
     id: string

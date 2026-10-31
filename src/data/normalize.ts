@@ -1,8 +1,11 @@
 import { createDemoData } from './demo'
+import { TREND_METRIC_KEYS, shiftIsoDate } from '../lib/trend-window'
 import type {
   ActivityItem,
   DashboardData,
+  HealthHistory,
   HeartZoneMinutes,
+  HistoryDay,
   RawFitbitPayload,
   SleepStageCounts,
   SleepStageKey,
@@ -32,6 +35,53 @@ const firstNumber = (...values: unknown[]) => {
 function shortDay(date: string) {
   const parsed = new Date(`${date}T12:00:00`)
   return new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(parsed).replace('.', '')
+}
+
+function emptyTrendPoint(date: string): TrendPoint {
+  const point = { date, label: shortDay(date) } as TrendPoint
+  for (const key of TREND_METRIC_KEYS) point[key] = null
+  return point
+}
+
+function historyTrendPoint(date: string, day: HistoryDay): TrendPoint {
+  const point = emptyTrendPoint(date)
+  for (const key of TREND_METRIC_KEYS) point[key] = numeric(day[key])
+  return point
+}
+
+// Field by field, the fresher source wins and the other one fills its gaps.
+function mergeTrendPoints(date: string, primary: TrendPoint | null, secondary: TrendPoint | null): TrendPoint {
+  const point = emptyTrendPoint(date)
+  for (const key of TREND_METRIC_KEYS) point[key] = primary?.[key] ?? secondary?.[key] ?? null
+  return point
+}
+
+function mergeHistory(
+  payloadTrends: Map<string, TrendPoint>,
+  archiveHistory: HealthHistory | null,
+  generatedAt: string,
+  selectedDate: string,
+) {
+  const payloadTime = Date.parse(generatedAt)
+  const historyTime = archiveHistory?.generatedAt ? Date.parse(archiveHistory.generatedAt) : Number.NaN
+  const historyFresher = Number.isFinite(historyTime) && (!Number.isFinite(payloadTime) || historyTime > payloadTime)
+  const historyDays = archiveHistory?.days ?? {}
+  const history = [...new Set([...payloadTrends.keys(), ...Object.keys(historyDays)])]
+    .filter((date) => date <= selectedDate)
+    .sort()
+    .map((date) => {
+      const fromPayload = payloadTrends.get(date) ?? null
+      const fromHistory = historyDays[date] ? historyTrendPoint(date, historyDays[date]) : null
+      return historyFresher
+        ? mergeTrendPoints(date, fromHistory, fromPayload)
+        : mergeTrendPoints(date, fromPayload, fromHistory)
+    })
+  // The day payload decides the short trend range: 14 days, or further back
+  // when a provider returns a longer series such as the legacy 30-day weight log.
+  const payloadStart = [...payloadTrends.keys()].sort()[0]
+  const windowStart = shiftIsoDate(selectedDate, -13)
+  const trendStart = payloadStart && payloadStart < windowStart ? payloadStart : windowStart
+  return { history, trends: history.filter((point) => point.date >= trendStart) }
 }
 
 function readIntraday(input: unknown, key: string): TimePoint[] {
@@ -170,7 +220,7 @@ function parseActivities(input: unknown): ActivityItem[] {
   }))
 }
 
-export function normalizeFitbitData(payload: RawFitbitPayload): DashboardData {
+export function normalizeFitbitData(payload: RawFitbitPayload, archiveHistory: HealthHistory | null = null): DashboardData {
   const e = payload.endpoints as Record<string, Json>
   const profile = asObject(e.profile).user ?? asObject(e.profile)
   const devices = asArray(e.devices)
@@ -232,9 +282,9 @@ export function normalizeFitbitData(payload: RawFitbitPayload): DashboardData {
     ...weightTrend.keys(),
     ...metricTrend.keys(),
   ])
-  const trends: TrendPoint[] = [...allDates].sort().map((date) => {
+  const payloadTrends = new Map<string, TrendPoint>([...allDates].sort().map((date): [string, TrendPoint] => {
     const metric = asObject(metricTrend.get(date))
-    return {
+    return [date, {
       date,
       label: shortDay(date),
       steps: stepsTrend.get(date) ?? null,
@@ -258,8 +308,9 @@ export function normalizeFitbitData(payload: RawFitbitPayload): DashboardData {
       bodyFat: numeric(metric.bodyFat),
       waterMl: numeric(metric.waterMl),
       caloriesIn: numeric(metric.caloriesIn),
-    }
-  })
+    }]
+  }))
+  const { history, trends } = mergeHistory(payloadTrends, archiveHistory, payload.generatedAt, payload.date)
   const lightActiveMinutes = numeric(activity?.lightlyActiveMinutes)
   const moderateActiveMinutes = numeric(activity?.fairlyActiveMinutes)
   const vigorousActiveMinutes = numeric(activity?.veryActiveMinutes)
@@ -373,6 +424,8 @@ export function normalizeFitbitData(payload: RawFitbitPayload): DashboardData {
       caloriesIn: numeric(foodSummary.calories),
     },
     trends,
+    history,
+    historyUpdatedAt: archiveHistory?.generatedAt ?? null,
     activities: parseActivities(e.activities),
     insights: buildInsights(activity, heartSummary, sleepRecord, goals),
     sync: {
