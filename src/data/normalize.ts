@@ -5,6 +5,7 @@ import type {
   DashboardData,
   HealthHistory,
   HeartZoneMinutes,
+  HistoryCoverage,
   HistoryDay,
   RawFitbitPayload,
   SleepStageCounts,
@@ -82,6 +83,13 @@ function mergeHistory(
   const windowStart = shiftIsoDate(selectedDate, -13)
   const trendStart = payloadStart && payloadStart < windowStart ? payloadStart : windowStart
   return { history, trends: history.filter((point) => point.date >= trendStart) }
+}
+
+// First day, last day and count of the dates a history covers.
+export function historyCoverage(dates: Iterable<string>, generatedAt: string | null): HistoryCoverage | null {
+  const sorted = [...dates].sort()
+  if (!sorted.length) return null
+  return { start: sorted[0], end: sorted[sorted.length - 1], dayCount: sorted.length, generatedAt }
 }
 
 function readIntraday(input: unknown, key: string): TimePoint[] {

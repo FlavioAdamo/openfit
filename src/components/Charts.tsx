@@ -81,6 +81,14 @@ function lastFiniteIndex(values: NumericValue[]) {
   return finiteIndexes(values).at(-1) ?? null
 }
 
+// Show every n-th axis label so the longest label still fits in its slot at
+// the 12px axis size (about 6.5px per character), capped at `maxLabels`.
+function axisLabelEvery(labels: string[], plotWidth: number, maxLabels: number) {
+  const longest = labels.reduce((length, label) => Math.max(length, label.length), 0)
+  const fitting = Math.floor(plotWidth / (longest * 6.5 + 12))
+  return Math.max(1, Math.ceil(labels.length / Math.max(2, Math.min(maxLabels, fitting))))
+}
+
 function stepActiveIndex(values: NumericValue[], activeIndex: number | null, direction: -1 | 1) {
   const available = finiteIndexes(values)
   if (!available.length) return null
@@ -192,7 +200,7 @@ export function LineChart({
   })
   const middleTick = Math.min(domain.max, domain.min + Math.ceil((domain.max - domain.min) / (domain.step * 2)) * domain.step)
   const ticks = [domain.min, middleTick, domain.max]
-  const labelEvery = Math.max(1, Math.ceil(labels.length / 6))
+  const labelEvery = axisLabelEvery(labels, plotWidth, 6)
   const lastValidIndex = lastFiniteIndex(values)
   const activeValue = activeIndex === null ? null : values[activeIndex]
   const handlePointerMove = (event: PointerEvent<SVGSVGElement>) => {
@@ -327,7 +335,7 @@ export function ColumnChart({
   const yFor = (value: number) => margin.top + (1 - value / max) * plotHeight
   const xCenter = (index: number) => margin.left + ((validX[index] - xMin) / Math.max(typicalStep, xMax - xMin)) * plotWidth
   const ticks = [0, max / 2, max]
-  const labelEvery = Math.max(1, Math.ceil(labels.length / 7))
+  const labelEvery = axisLabelEvery(labels, plotWidth, 7)
   const activeValue = activeIndex === null ? null : values[activeIndex]
   const handleKeyDown = (event: KeyboardEvent<SVGSVGElement>) => {
     const direction = arrowDirection(event.key)

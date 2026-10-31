@@ -476,7 +476,8 @@ select { font: inherit; }
 .date-loading span { font-size: var(--text-13); line-height: var(--leading-normal); }
 .date-loading small { margin-top: var(--space-2); font-size: var(--text-12); line-height: var(--leading-normal); }
 
-.date-loading-progress {
+.date-loading-progress,
+.history-progress {
   width: 100%;
   height: 3px;
   margin-top: var(--space-8);
@@ -485,7 +486,8 @@ select { font: inherit; }
   background: var(--border);
 }
 
-.date-loading-progress i {
+.date-loading-progress i,
+.history-progress i {
   display: block;
   height: 100%;
   border-radius: inherit;
@@ -493,7 +495,8 @@ select { font: inherit; }
   transition: width var(--motion-base) var(--ease-standard);
 }
 
-.date-loading-progress.is-indeterminate i { animation: sync-indeterminate 1.15s ease-in-out infinite; }
+.date-loading-progress.is-indeterminate i,
+.history-progress.is-indeterminate i { animation: sync-indeterminate 1.15s ease-in-out infinite; }
 
 @keyframes sync-indeterminate {
   from { transform: translateX(-120%); }
@@ -656,6 +659,41 @@ select { font: inherit; }
 .tiny-stat { display: flex; min-width: 0; flex-direction: column; gap: var(--space-2); }
 .tiny-stat span { color: var(--muted-foreground); font-size: var(--text-13); }
 .tiny-stat strong { color: var(--foreground); font-size: var(--text-13); font-weight: var(--weight-medium); font-variant-numeric: tabular-nums; }
+
+/* Segmented control: a radio group that picks the trend window. */
+.segmented-control {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+}
+
+.segmented-option {
+  display: inline-flex;
+  height: var(--space-24);
+  align-items: center;
+  justify-content: center;
+  padding-inline: var(--space-8);
+  border: 0;
+  border-radius: var(--radius-xs);
+  color: var(--muted-foreground);
+  background: transparent;
+  font: inherit;
+  font-size: var(--text-12);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard);
+}
+
+.segmented-option:hover { color: var(--foreground); }
+.segmented-option.is-active { color: var(--foreground); background: var(--muted); }
+.segmented-option:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
 
 .empty-value {
   display: grid;
@@ -1303,6 +1341,17 @@ select { font: inherit; }
 .privacy-card.is-warning { border-color: color-mix(in srgb, var(--warning) 38%, var(--border)); }
 .privacy-card.is-warning > svg { color: var(--warning); }
 
+/* Long-term history panel on the Data page */
+.history-card .panel-header { margin-bottom: var(--space-8); }
+.history-copy,
+.history-note { margin: 0; color: var(--muted-foreground); font-size: var(--text-13); line-height: var(--leading-normal); }
+.history-copy { font-variant-numeric: tabular-nums; }
+.history-progress-row { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-12); }
+.history-progress-row > span { color: var(--muted-foreground); font-size: var(--text-13); font-variant-numeric: tabular-nums; }
+.history-progress-row .history-progress { margin-top: var(--space-4); }
+.history-actions { display: flex; flex-wrap: wrap; gap: var(--space-8); margin-top: var(--space-16); }
+.history-note { margin-top: var(--space-12); }
+
 /* ---------------------------------------------------------------------------
    9. Toast and settings dialog
    --------------------------------------------------------------------------- */
@@ -1836,6 +1885,7 @@ select { font: inherit; }
 }
 
 @media (max-width: 560px) {
+  .section-title { flex-wrap: wrap; align-items: flex-start; }
   .topbar { gap: var(--space-8); padding-inline: var(--space-12); }
   .topbar-actions { gap: var(--space-2); }
   .date-control [data-slot="button"] { display: none; }

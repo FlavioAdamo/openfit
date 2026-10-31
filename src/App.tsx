@@ -30,12 +30,23 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import type { DashboardData, FitbitAuthStatus, FitbitConfigInput, HealthProvider, PageId } from '@/types'
+import type {
+  BackfillProgress,
+  DashboardData,
+  FitbitAuthStatus,
+  FitbitConfigInput,
+  HealthHistory,
+  HealthProvider,
+  HistoryWindowDays,
+  PageId,
+  RawFitbitPayload,
+} from '@/types'
 import { createDemoData, localIso } from '@/data/demo'
-import { normalizeFitbitData } from '@/data/normalize'
-import { formatDate, relativeTime } from '@/lib/format'
+import { historyCoverage, normalizeFitbitData } from '@/data/normalize'
+import { formatDate, formatNumber, relativeTime } from '@/lib/format'
+import type { TrendWindow } from '@/lib/trend-window'
 import { cn } from '@/lib/utils'
-import { ActivityView, BodyView, DevicesView, HealthView, SleepView, TodayView } from '@/components/Views'
+import { ActivityView, BodyView, DevicesView, HealthView, SleepView, TodayView, type BackfillPanelState } from '@/components/Views'
 import { HealthAssistant } from '@/components/HealthAssistant'
 import type { AssistantNavigation } from '@/lib/health-assistant'
 import type { AppIcon } from '@/components/icons'
@@ -98,6 +109,14 @@ interface SyncProgressState {
   date?: string
 }
 
+interface BackfillState {
+  running: boolean
+  requestedDays: HistoryWindowDays | null
+  progress: BackfillProgress | null
+}
+
+const idleBackfill: BackfillState = { running: false, requestedDays: null, progress: null }
+
 function shiftDate(value: string, days: number) {
   const [year, month, day] = value.split('-').map(Number)
   return localIso(new Date(year, month - 1, day + days, 12))
@@ -124,11 +143,18 @@ export default function App() {
   const [connecting, setConnecting] = useState(false)
   const [syncProgress, setSyncProgress] = useState<SyncProgressState | null>(null)
   const [toast, setToast] = useState<ToastState | null>(null)
+  const [trendWindow, setTrendWindow] = useState<TrendWindow>(14)
+  const [history, setHistory] = useState<HealthHistory | null>(null)
+  const [backfill, setBackfill] = useState<BackfillState>(idleBackfill)
   const selectedDateRef = useRef(selectedDate)
   const dataDateRef = useRef(data.selectedDate)
   const syncingRef = useRef(false)
   const syncTargetDateRef = useRef<string | null>(null)
   const queuedDateRef = useRef<string | null>(null)
+  // The long-term history and the raw payload behind the current view, so a
+  // finished backfill can re-normalize the shown day without another sync.
+  const historyRef = useRef<HealthHistory | null>(null)
+  const payloadRef = useRef<RawFitbitPayload | null>(null)
 
   useLayoutEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
@@ -145,10 +171,17 @@ export default function App() {
   const loadNativeState = useCallback(async () => {
     if (!window.fitbit) return
     try {
-      const [nextStatus, cached] = await Promise.all([window.fitbit.getStatus(), window.fitbit.getCachedData()])
+      const [nextStatus, cached, archiveHistory] = await Promise.all([
+        window.fitbit.getStatus(),
+        window.fitbit.getCachedData(),
+        window.fitbit.getHistory(),
+      ])
       setStatus(nextStatus)
+      historyRef.current = archiveHistory
+      setHistory(archiveHistory)
       if (cached) {
-        const normalized = normalizeFitbitData(cached)
+        const normalized = normalizeFitbitData(cached, archiveHistory)
+        payloadRef.current = cached
         dataDateRef.current = normalized.selectedDate
         selectedDateRef.current = normalized.selectedDate
         setData({ ...normalized, source: 'cache' })
@@ -185,9 +218,10 @@ export default function App() {
 
         try {
           const payload = await window.fitbit.sync(date)
-          const normalized = normalizeFitbitData(payload)
+          const normalized = normalizeFitbitData(payload, historyRef.current)
 
           if (selectedDateRef.current === date) {
+            payloadRef.current = payload
             dataDateRef.current = normalized.selectedDate
             setData(normalized)
             setToast({
@@ -249,11 +283,48 @@ export default function App() {
         setSyncProgress(progress)
       }
     })
+    const unsubscribeBackfill = window.fitbit.onBackfillProgress((progress) => {
+      setBackfill((current) => current.running ? { ...current, progress } : current)
+    })
     return () => {
       unsubscribeAuth()
       unsubscribeSync()
+      unsubscribeBackfill()
     }
   }, [loadNativeState, runSync])
+
+  const startBackfill = useCallback(async (days: HistoryWindowDays) => {
+    if (!window.fitbit) return
+    setBackfill({ running: true, requestedDays: days, progress: null })
+    try {
+      const result = await window.fitbit.backfillHistory({ days })
+      const nextHistory = await window.fitbit.getHistory()
+      historyRef.current = nextHistory
+      setHistory(nextHistory)
+      const payload = payloadRef.current
+      if (payload && payload.date === dataDateRef.current) {
+        setData((current) => ({ ...normalizeFitbitData(payload, nextHistory), source: current.source }))
+      }
+      const coverage = result.coverage
+      const span = coverage ? `${formatNumber(coverage.dayCount)} days of history` : 'No history'
+      setToast({
+        tone: result.cancelled || result.errorCount ? 'neutral' : 'success',
+        message: result.cancelled
+          ? `Stopped early. ${span} kept.`
+          : result.errorCount
+          ? `${span} loaded. ${result.errorCount} requests failed.`
+          : `${span} loaded.`,
+      })
+    } catch (error) {
+      setToast({ tone: 'error', message: error instanceof Error ? error.message : 'History download failed.' })
+    } finally {
+      setBackfill(idleBackfill)
+    }
+  }, [])
+
+  const cancelBackfill = useCallback(() => {
+    void window.fitbit?.cancelBackfill()
+  }, [])
 
   useEffect(() => {
     if (!toast) return
@@ -315,6 +386,9 @@ export default function App() {
   const disconnect = async () => {
     if (!window.fitbit) return
     setStatus(await window.fitbit.disconnect())
+    historyRef.current = null
+    payloadRef.current = null
+    setHistory(null)
     setData(createDemoData(selectedDate))
     setSettingsOpen(false)
     setPage('today')
@@ -330,15 +404,28 @@ export default function App() {
     if (!result.canceled) setToast({ tone: 'success', message: 'JSON archive exported.' })
   }
 
+  // Demo data carries its own sample history; a connected account reports the archive's.
+  const backfillPanel = useMemo<BackfillPanelState>(() => ({
+    running: backfill.running,
+    requestedDays: backfill.requestedDays,
+    progress: backfill.progress,
+    coverage: data.source === 'demo'
+      ? historyCoverage(data.history.map((point) => point.date), data.historyUpdatedAt)
+      : historyCoverage(Object.keys(history?.days ?? {}), history?.generatedAt ?? null),
+    lastRun: data.source === 'demo' ? null : history?.lastRun ?? null,
+    onStart: (days) => void startBackfill(days),
+    onCancel: cancelBackfill,
+  }), [backfill, cancelBackfill, data.history, data.historyUpdatedAt, data.source, history, startBackfill])
+
   const currentView = useMemo(() => {
-    const props = { data, status, navigate: setPage }
+    const props = { data, status, navigate: setPage, trendWindow, onTrendWindowChange: setTrendWindow, backfill: backfillPanel }
     if (page === 'activity') return <ActivityView {...props} />
     if (page === 'health') return <HealthView {...props} />
     if (page === 'sleep') return <SleepView {...props} />
     if (page === 'body') return <BodyView {...props} />
     if (page === 'devices') return <DevicesView {...props} />
     return <TodayView {...props} />
-  }, [data, page, status])
+  }, [backfillPanel, data, page, status, trendWindow])
 
   const isToday = selectedDate === localIso()
   const sourceLabel = status.connected
