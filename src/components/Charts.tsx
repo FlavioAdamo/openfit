@@ -1,5 +1,5 @@
 import { useId, useLayoutEffect, useRef, useState } from 'react'
-import type { KeyboardEvent, PointerEvent, ReactNode } from 'react'
+import type { CSSProperties, KeyboardEvent, PointerEvent } from 'react'
 import type { SleepStage, SleepStageSegment } from '../types'
 import { formatNumber, formatTime } from '../lib/format'
 
@@ -73,6 +73,27 @@ function chartSummary(values: number[], formatter: (value: number) => string) {
   return `Minimum ${formatter(Math.min(...values))}, maximum ${formatter(Math.max(...values))}${latest === undefined ? '' : `, latest value ${formatter(latest)}`}.`
 }
 
+function finiteIndexes(values: NumericValue[]) {
+  return values.flatMap((value, index) => value !== null && Number.isFinite(value) ? [index] : [])
+}
+
+function lastFiniteIndex(values: NumericValue[]) {
+  return finiteIndexes(values).at(-1) ?? null
+}
+
+function stepActiveIndex(values: NumericValue[], activeIndex: number | null, direction: -1 | 1) {
+  const available = finiteIndexes(values)
+  if (!available.length) return null
+  const currentPosition = activeIndex === null ? available.length - 1 : Math.max(0, available.indexOf(activeIndex))
+  return available[Math.min(available.length - 1, Math.max(0, currentPosition + direction))]
+}
+
+function arrowDirection(key: string): -1 | 1 | null {
+  if (key === 'ArrowLeft') return -1
+  if (key === 'ArrowRight') return 1
+  return null
+}
+
 function AccessibleChartTable({
   title,
   labels,
@@ -85,18 +106,20 @@ function AccessibleChartTable({
   formatter: (value: number) => string
 }) {
   return (
-    <table className="sr-only chart-data-table">
-      <caption>{title}</caption>
-      <thead><tr><th scope="col">Period</th><th scope="col">Value</th></tr></thead>
-      <tbody>
-        {values.map((value, index) => (
-          <tr key={`${labels[index] ?? index}-${index}`}>
-            <th scope="row">{labels[index] ?? `Point ${index + 1}`}</th>
-            <td>{value === null ? 'Missing data' : formatter(value)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className="sr-only">
+      <table className="chart-data-table">
+        <caption>{title}</caption>
+        <thead><tr><th scope="col">Period</th><th scope="col">Value</th></tr></thead>
+        <tbody>
+          {values.map((value, index) => (
+            <tr key={`${labels[index] ?? index}-${index}`}>
+              <th scope="row">{labels[index] ?? `Point ${index + 1}`}</th>
+              <td>{value === null ? 'Missing data' : formatter(value)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   )
 }
 
@@ -116,7 +139,7 @@ export function LineChart({
   values,
   labels = [],
   xValues,
-  color = 'var(--color-indigo)',
+  color = 'var(--category-color, var(--chart-1))',
   height = 220,
   compact = false,
   formatter = (value) => formatNumber(value),
@@ -170,8 +193,7 @@ export function LineChart({
   const middleTick = Math.min(domain.max, domain.min + Math.ceil((domain.max - domain.min) / (domain.step * 2)) * domain.step)
   const ticks = [domain.min, middleTick, domain.max]
   const labelEvery = Math.max(1, Math.ceil(labels.length / 6))
-  let lastValidIndex = values.length - 1
-  while (lastValidIndex > 0 && (values[lastValidIndex] === null || !Number.isFinite(values[lastValidIndex]))) lastValidIndex -= 1
+  const lastValidIndex = lastFiniteIndex(values)
   const activeValue = activeIndex === null ? null : values[activeIndex]
   const handlePointerMove = (event: PointerEvent<SVGSVGElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect()
@@ -189,15 +211,10 @@ export function LineChart({
     setActiveIndex(nearestIndex)
   }
   const handleKeyDown = (event: KeyboardEvent<SVGSVGElement>) => {
-    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    const direction = arrowDirection(event.key)
+    if (direction === null) return
     event.preventDefault()
-    const available = values.flatMap((value, index) => value !== null && Number.isFinite(value) ? [index] : [])
-    if (!available.length) return
-    const currentPosition = activeIndex === null ? available.length - 1 : Math.max(0, available.indexOf(activeIndex))
-    const nextPosition = event.key === 'ArrowRight'
-      ? Math.min(available.length - 1, currentPosition + 1)
-      : Math.max(0, currentPosition - 1)
-    setActiveIndex(available[nextPosition])
+    setActiveIndex(stepActiveIndex(values, activeIndex, direction))
   }
 
   return (
@@ -209,7 +226,7 @@ export function LineChart({
         aria-label={ariaLabel}
         onPointerMove={handlePointerMove}
         onPointerLeave={() => setActiveIndex(null)}
-        onFocus={() => setActiveIndex(lastValidIndex)}
+        onFocus={() => setActiveIndex(lastFiniteIndex(values))}
         onBlur={() => setActiveIndex(null)}
         onKeyDown={handleKeyDown}
       >
@@ -243,9 +260,7 @@ export function LineChart({
           <path key={index} d={segment.line} fill="none" stroke={color} strokeWidth={compact ? 2.4 : 2.6} strokeLinecap="round" strokeLinejoin="round" />
         ))}
         {!compact && values.length <= 20 && values.map((value, index) => value !== null && Number.isFinite(value) ? (
-          <circle key={index} cx={xFor(index)} cy={yFor(value)} r={index === lastValidIndex ? 4 : 2.8} fill="var(--card)" stroke={color} strokeWidth="2">
-            <title>{`${labels[index] ?? `Point ${index + 1}`}: ${formatter(value)}`}</title>
-          </circle>
+          <circle key={index} cx={xFor(index)} cy={yFor(value)} r={index === lastValidIndex ? 4 : 2.8} fill="var(--card)" stroke={color} strokeWidth="2" />
         ) : null)}
         {!compact && labels.map((label, index) => {
           const lastIndex = labels.length - 1
@@ -279,7 +294,7 @@ export function ColumnChart({
   values,
   labels = [],
   xValues,
-  color = 'var(--color-indigo)',
+  color = 'var(--category-color, var(--chart-1))',
   height = 220,
   compact = false,
   formatter = (value) => formatNumber(value),
@@ -314,10 +329,25 @@ export function ColumnChart({
   const ticks = [0, max / 2, max]
   const labelEvery = Math.max(1, Math.ceil(labels.length / 7))
   const activeValue = activeIndex === null ? null : values[activeIndex]
+  const handleKeyDown = (event: KeyboardEvent<SVGSVGElement>) => {
+    const direction = arrowDirection(event.key)
+    if (direction === null) return
+    event.preventDefault()
+    setActiveIndex(stepActiveIndex(values, activeIndex, direction))
+  }
 
   return (
     <div ref={containerRef} className={`column-chart ${compact ? 'is-compact' : ''}`} style={{ height }}>
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={ariaLabel} onPointerLeave={() => setActiveIndex(null)}>
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        tabIndex={0}
+        aria-label={ariaLabel}
+        onPointerLeave={() => setActiveIndex(null)}
+        onFocus={() => setActiveIndex(lastFiniteIndex(values))}
+        onBlur={() => setActiveIndex(null)}
+        onKeyDown={handleKeyDown}
+      >
         <title>{ariaLabel}</title>
         <desc>{chartSummary(valid, formatter)}</desc>
         {compact && (
@@ -355,17 +385,11 @@ export function ColumnChart({
               width={barWidth}
               height={barHeight}
               rx={Math.min(4, barWidth / 3)}
-              fill={value === null ? 'var(--color-graphite)' : color}
+              fill={value === null ? 'var(--border)' : color}
               opacity={value === null ? 0.3 : activeIndex === null || activeIndex === index ? 0.92 : 0.34}
               className="chart-column-mark"
-              tabIndex={value === null ? undefined : 0}
-              aria-label={value === null ? `${labels[index] ?? `Period ${index + 1}`}: no data` : `${labels[index] ?? `Period ${index + 1}`}: ${formatter(value)}`}
               onPointerEnter={() => value !== null && setActiveIndex(index)}
-              onFocus={() => value !== null && setActiveIndex(index)}
-              onBlur={() => setActiveIndex(null)}
-            >
-              <title>{value === null ? `${labels[index] ?? `Period ${index + 1}`}: no data` : `${labels[index] ?? `Period ${index + 1}`}: ${formatter(value)}`}</title>
-            </rect>
+            />
           )
         })}
         {!compact && labels.map((label, index) => {
@@ -393,7 +417,7 @@ export function ColumnChart({
 export function RadialProgress({
   value,
   max = 100,
-  color = 'var(--color-indigo)',
+  color = 'var(--category-color, var(--chart-1))',
   label,
   valueLabel,
   size = 84,
@@ -412,7 +436,7 @@ export function RadialProgress({
   const circumference = Math.PI * 2 * radius
   const displayValue = valueLabel ?? `${Math.round(progress * 100)}%`
   return (
-    <div className="radial-progress" style={{ width: size, height: size }} role="img" aria-label={`${label}: ${displayValue}`}>
+    <div className="radial-progress" style={{ width: size, height: size, '--radial-size': `${size}px` } as CSSProperties} role="img" aria-label={`${label}: ${displayValue}`}>
       <svg viewBox="0 0 100 100" aria-hidden="true">
         <circle className="radial-track" cx="50" cy="50" r={radius} />
         <circle
@@ -434,7 +458,7 @@ export function BulletChart({
   value,
   target,
   max,
-  color = 'var(--color-indigo)',
+  color = 'var(--category-color, var(--chart-1))',
   label,
   valueLabel,
 }: {
@@ -572,8 +596,4 @@ export function SleepStageTimeline({
       </svg>
     </div>
   )
-}
-
-export function ChartKpi({ children }: { children: ReactNode }) {
-  return <div className="chart-kpi">{children}</div>
 }
