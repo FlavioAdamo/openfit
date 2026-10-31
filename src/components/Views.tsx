@@ -437,7 +437,7 @@ export function TodayView({ data, navigate }: ViewProps) {
                 <PanelHeader title="Movement" icon={StepsIcon} action={<ChevronRightIcon aria-hidden="true" />} />
                 <div className="home-card-lead">
                   <div><strong>{formatNumber(steps)}</strong><span>steps</span></div>
-                  {data.activity.stepsGoal !== null && data.activity.stepsGoal > 0 && <RadialProgress value={steps} max={data.activity.stepsGoal} color="var(--category-activity)" label="goal" valueLabel={`${Math.round(steps / data.activity.stepsGoal * 100)}%`} size={78} />}
+                  {data.activity.stepsGoal !== null && data.activity.stepsGoal > 0 && <RadialProgress value={steps} max={data.activity.stepsGoal} color="var(--category-activity)" label="goal" valueLabel={`${Math.round(steps / data.activity.stepsGoal * 100)}%`} size={80} />}
                 </div>
                 {data.activity.stepsIntraday.length > 0 && (
                   <div className="home-primary-chart">
@@ -461,7 +461,7 @@ export function TodayView({ data, navigate }: ViewProps) {
                     <PanelHeader title="Sleep" icon={SleepIcon} action={<ChevronRightIcon aria-hidden="true" />} />
                     <div className="sleep-overview-lead">
                       <div className="sleep-overview-duration"><strong>{sleepPrimaryValue}</strong>{(data.sleep.startTime || data.sleep.endTime) && <span>{formatTime(data.sleep.startTime)} – {formatTime(data.sleep.endTime)}</span>}<small>{sleepGoalNote}</small></div>
-                      {(hasValue(data.sleep.score) || hasValue(data.sleep.efficiency)) && <RadialProgress value={data.sleep.score ?? data.sleep.efficiency} color="var(--category-sleep)" label={hasValue(data.sleep.score) ? sleepScoreCategory(data.sleep.score) : 'efficiency'} valueLabel={formatNumber(data.sleep.score ?? data.sleep.efficiency)} size={68} />}
+                      {(hasValue(data.sleep.score) || hasValue(data.sleep.efficiency)) && <RadialProgress value={data.sleep.score ?? data.sleep.efficiency} color="var(--category-sleep)" label={hasValue(data.sleep.score) ? sleepScoreCategory(data.sleep.score) : 'Efficiency'} valueLabel={formatNumber(data.sleep.score ?? data.sleep.efficiency)} size={80} />}
                     </div>
                     {data.sleep.stages.some((stage) => stage.minutes > 0) && <SleepStageBar stages={data.sleep.stages} compact showLegend={false} />}
                   </Panel>
@@ -687,7 +687,7 @@ export function HealthView({ data }: ViewProps) {
         {signals.length > 0 && (
           <section>
             <SectionTitle title="Nightly metrics" copy="Latest available measurements, without diagnostic thresholds." />
-            <Panel className="signal-panel" category="heart">
+            <Panel className="signal-panel" category="recovery">
               {signals.map((signal, index) => <div key={signal.label}>{index > 0 && <Separator />}<SignalRow signal={signal} /></div>)}
             </Panel>
           </section>
@@ -707,9 +707,9 @@ export function HealthView({ data }: ViewProps) {
         <section>
           <SectionTitle title="Physiological trends" copy="Compare measurements with your personal trends, not generic thresholds." />
           <div className="metric-trend-grid">
-            <MetricTrendPanel data={data} category="heart" icon={SignalIcon} title="HRV" values={data.trends.map((point) => point.hrvMs)} formatter={(value) => `${formatDecimal(value)} ms`} />
-            <MetricTrendPanel data={data} category="heart" icon={CloudIcon} title="Average SpO₂" values={data.trends.map((point) => point.spo2)} formatter={(value) => `${formatDecimal(value)}%`} />
-            <MetricTrendPanel data={data} category="heart" icon={BreathingIcon} title="Breathing rate" values={data.trends.map((point) => point.breathingRate)} formatter={(value) => `${formatDecimal(value)} rpm`} />
+            <MetricTrendPanel data={data} category="recovery" icon={SignalIcon} title="HRV" values={data.trends.map((point) => point.hrvMs)} formatter={(value) => `${formatDecimal(value)} ms`} />
+            <MetricTrendPanel data={data} category="recovery" icon={CloudIcon} title="Average SpO₂" values={data.trends.map((point) => point.spo2)} formatter={(value) => `${formatDecimal(value)}%`} />
+            <MetricTrendPanel data={data} category="recovery" icon={BreathingIcon} title="Breathing rate" values={data.trends.map((point) => point.breathingRate)} formatter={(value) => `${formatDecimal(value)} rpm`} />
             <MetricTrendPanel data={data} category="recovery" icon={GaugeIcon} title="Skin temperature" values={data.trends.map((point) => point.skinTemperature)} formatter={(value) => `${signedNumber(value, 1)} °C`} />
             <MetricTrendPanel data={data} category="recovery" icon={GaugeIcon} title="Body temperature" values={data.trends.map((point) => point.coreTemperature)} formatter={(value) => `${formatDecimal(value)} °C`} />
             <MetricTrendPanel data={data} category="heart" icon={GaugeIcon} title="Cardio fitness" values={data.trends.map((point) => point.cardioScore)} formatter={(value) => formatNumber(value)} />
@@ -744,7 +744,7 @@ export function SleepView({ data }: ViewProps) {
     <div className="page-stack sleep-page">
       {hasSummary && (
         <div className="sleep-layout">
-          <Panel className="sleep-main-card" tone="violet" category="sleep">
+          <Panel className="sleep-main-card" category="sleep">
             <PanelHeader eyebrow="Last night" title="Duration and quality" icon={SleepIcon} />
             <div className="sleep-main-summary">
               <div className="sleep-duration-large">
@@ -773,7 +773,6 @@ export function SleepView({ data }: ViewProps) {
                   max={Math.max(data.sleep.totalMinutes, data.sleep.goalMinutes) * 1.08}
                   label="Duration compared with goal"
                   valueLabel={`${compactMinutes(data.sleep.totalMinutes)} / ${compactMinutes(data.sleep.goalMinutes)}`}
-                  color="var(--color-cyan)"
                 />
               )}
             </div>
@@ -887,7 +886,6 @@ export function BodyView({ data }: ViewProps) {
                     max={Math.max(data.body.waterMl, data.body.waterGoalMl ?? 0) * 1.08}
                     label="Water"
                     valueLabel={`${formatNumber(data.body.waterMl)} ml${data.body.waterGoalMl ? ` / ${formatNumber(data.body.waterGoalMl)} ml` : ''}`}
-                    color="var(--color-cyan)"
                   />
                 )}
                 {hasValue(data.body.caloriesIn) && <BodyMetric label="Calories consumed" value={formatNumber(data.body.caloriesIn)} unit="kcal" icon={CaloriesIcon} note="Recorded total" />}
@@ -909,6 +907,17 @@ export function BodyView({ data }: ViewProps) {
       {!hasBodyData(data) && <EmptyValue>No body measurements available for this account.</EmptyValue>}
     </div>
   )
+}
+
+// Fitbit reports device types in capitals; show them as a phrase.
+function readableDeviceType(type: string | null | undefined) {
+  if (!type) return null
+  return type === type.toUpperCase() ? type.charAt(0) + type.slice(1).toLowerCase() : type
+}
+
+// Lowercase list items but keep acronyms such as HRV intact.
+function listLabel(label: string) {
+  return label === label.toUpperCase() ? label : label.toLowerCase()
 }
 
 function CoverageRow({ icon: Icon, label, items }: { icon: AppIcon; label: string; items: string[] }) {
@@ -935,7 +944,7 @@ export function DevicesView({ data, status }: ViewProps) {
     data.health.ecgClassification && 'ECG',
   ].filter((item): item is string => Boolean(item))
   const sleep = [hasSleepData(data) && 'duration and stages', hasValue(data.sleep.score) && 'score'].filter((item): item is string => Boolean(item))
-  const nightly = overnightSignals(data).map((signal) => signal.label.toLowerCase())
+  const nightly = overnightSignals(data).map((signal) => listLabel(signal.label))
   const body = [
     hasValue(data.body.weightKg) && 'weight',
     hasValue(data.body.bodyFat) && 'body fat',
@@ -958,7 +967,7 @@ export function DevicesView({ data, status }: ViewProps) {
             <div className="device-copy">
               <Badge variant="secondary" className={`connection-badge ${isConnected ? 'is-connected' : ''}`}><span className={`status-dot ${isConnected ? 'online' : ''}`} /> {isConnected ? 'Connected' : 'Not connected'}</Badge>
               <h2>{deviceName}</h2>
-              <p>{data.device?.type ?? sourceName}{data.device?.firmware && !isDemo ? ` · firmware ${data.device.firmware}` : ''}</p>
+              <p>{readableDeviceType(data.device?.type) ?? sourceName}{data.device?.firmware && !isDemo ? ` · firmware ${data.device.firmware}` : ''}</p>
               <div className="device-facts">
                 {hasValue(data.device?.batteryLevel ?? null) && <span><BatteryIcon /> {formatNumber(data.device?.batteryLevel ?? null)}%</span>}
                 {data.device?.lastSyncTime && <span><CloudIcon /> Updated {relativeTime(data.device.lastSyncTime)}</span>}
@@ -984,7 +993,6 @@ export function DevicesView({ data, status }: ViewProps) {
             max={Math.max(data.sync.endpointCount, 1)}
             label="Available sources"
             valueLabel={`${data.sync.successCount} / ${data.sync.endpointCount}`}
-            color="var(--color-emerald)"
           />
           <div className="coverage-list">
             <CoverageRow icon={ActivityIcon} label="Movement" items={movement} />

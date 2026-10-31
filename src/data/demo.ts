@@ -216,7 +216,7 @@ export function createDemoData(selectedDate = localIso()): DashboardData {
       coreTemperature: null,
       vo2Max: '49–53',
       cardioScore: latest.cardioScore,
-      ecgClassification: 'Ritmo sinusale',
+      ecgClassification: 'Sinus rhythm',
       bloodGlucoseMgDl: null,
       irregularRhythmAlerts: 0,
     },

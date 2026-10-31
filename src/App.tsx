@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { ChevronsUpDown, LoaderCircle, RefreshCw, Sparkles } from 'lucide-react'
+import { LoaderCircle, RefreshCw, Sparkles } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import {
@@ -60,6 +60,7 @@ import {
   SparkleIcon,
   StepsIcon,
   TodayIcon,
+  UserIcon,
 } from '@/components/icons'
 
 type NavCategory = 'summary' | 'activity' | 'heart' | 'sleep' | 'body' | 'device'
@@ -533,7 +534,7 @@ function OpenFitSidebar({
     .filter(Boolean)
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase())
-    .join('') || 'PB'
+    .join('')
   const wellbeingItems = items.filter((item) => item.id !== 'devices')
   const dataItem = items.find((item) => item.id === 'devices')
 
@@ -548,7 +549,7 @@ function OpenFitSidebar({
   }
 
   return (
-    <Sidebar collapsible="icon" className="pulse-sidebar">
+    <Sidebar collapsible="icon" className="app-sidebar">
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
@@ -620,16 +621,16 @@ function OpenFitSidebar({
       <SidebarFooter>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" className="sidebar-user" tooltip={userName} onClick={openSettings}>
+            <SidebarMenuButton size="lg" className="sidebar-user" tooltip="Settings" aria-label={`Open settings for ${userName}`} onClick={openSettings}>
               <Avatar className="sidebar-user-avatar">
                 {userAvatar && <AvatarImage src={userAvatar} alt="" />}
-                <AvatarFallback>{initials}</AvatarFallback>
+                <AvatarFallback>{initials || <UserIcon aria-hidden="true" />}</AvatarFallback>
               </Avatar>
               <span className="sidebar-user-copy">
                 <strong>{userName}</strong>
                 <small>{sourceLabel}</small>
               </span>
-              <ChevronsUpDown className="sidebar-switcher-icon" />
+              <SettingsIcon className="sidebar-user-action" aria-hidden="true" />
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
@@ -638,6 +639,8 @@ function OpenFitSidebar({
     </Sidebar>
   )
 }
+
+type CredentialField = 'clientId' | 'clientSecret' | 'redirectUri'
 
 function SettingsDialog({
   open,
@@ -663,6 +666,8 @@ function SettingsDialog({
   const [redirectUri, setRedirectUri] = useState(status.redirectUri)
   const [provider, setProvider] = useState<HealthProvider>(status.provider)
   const [editing, setEditing] = useState(!status.configured)
+  const [touched, setTouched] = useState<Partial<Record<CredentialField, boolean>>>({})
+  const [submitted, setSubmitted] = useState(false)
 
   useEffect(() => {
     if (!open) return
@@ -671,18 +676,24 @@ function SettingsDialog({
     setProvider(status.provider)
     setClientSecret('')
     setEditing(!status.configured)
+    setTouched({})
+    setSubmitted(false)
   }, [open, status])
 
   const secretRequired = provider === 'google-health'
   const providerLabel = provider === 'google-health' ? 'Google Health' : 'Fitbit legacy'
   const savedSecretMatchesProvider = status.hasClientSecret && status.provider === provider
-  const canSave = status.storageEncrypted
-    && clientId.trim().length > 2
-    && (!secretRequired || clientSecret.trim().length > 4 || savedSecretMatchesProvider)
-    && redirectUri.startsWith('http://127.0.0.1:')
+  const errors: Partial<Record<CredentialField, string>> = {}
+  if (clientId.trim().length <= 2) errors.clientId = 'Enter the OAuth client ID from the developer console.'
+  if (secretRequired && clientSecret.trim().length <= 4 && !savedSecretMatchesProvider) errors.clientSecret = 'Google Health needs the client secret that goes with this ID.'
+  if (!redirectUri.trim().startsWith('http://127.0.0.1:')) errors.redirectUri = 'Use a loopback address that starts with http://127.0.0.1:'
+  const canSave = status.storageEncrypted && Object.keys(errors).length === 0
+  const errorFor = (field: CredentialField) => (submitted || touched[field] ? errors[field] : undefined)
+  const markTouched = (field: CredentialField) => setTouched((current) => ({ ...current, [field]: true }))
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
+    setSubmitted(true)
     if (!canSave) return
     void onSave({
       provider,
@@ -733,20 +744,60 @@ function SettingsDialog({
               </label>
             </div>
 
+            {!status.storageEncrypted && (
+              <div className="form-notice" role="status">
+                <ShieldIcon aria-hidden="true" />
+                <p>{status.isElectron ? 'Encrypted storage is not available on this system, so credentials cannot be saved.' : 'Credentials can only be saved in the desktop app.'}</p>
+              </div>
+            )}
+
             <div className="form-field">
               <Label htmlFor="client-id">OAuth Client ID</Label>
-              <Input id="client-id" value={clientId} onChange={(event) => setClientId(event.target.value)} autoComplete="off" />
+              <Input
+                id="client-id"
+                className="is-mono"
+                value={clientId}
+                onChange={(event) => setClientId(event.target.value)}
+                onBlur={() => markTouched('clientId')}
+                autoComplete="off"
+                aria-invalid={errorFor('clientId') ? true : undefined}
+                aria-describedby={errorFor('clientId') ? 'client-id-error' : undefined}
+              />
+              {errorFor('clientId') && <p className="form-error" id="client-id-error">{errorFor('clientId')}</p>}
             </div>
             {secretRequired && (
               <div className="form-field">
                 <Label htmlFor="client-secret">Client Secret {savedSecretMatchesProvider && <span>· leave blank to keep the current one</span>}</Label>
-                <Input id="client-secret" type="password" value={clientSecret} onChange={(event) => setClientSecret(event.target.value)} placeholder={savedSecretMatchesProvider ? '••••••••••••' : ''} autoComplete="new-password" />
+                <Input
+                  id="client-secret"
+                  className="is-mono"
+                  type="password"
+                  value={clientSecret}
+                  onChange={(event) => setClientSecret(event.target.value)}
+                  onBlur={() => markTouched('clientSecret')}
+                  placeholder={savedSecretMatchesProvider ? '••••••••••••' : ''}
+                  autoComplete="new-password"
+                  aria-invalid={errorFor('clientSecret') ? true : undefined}
+                  aria-describedby={errorFor('clientSecret') ? 'client-secret-error' : undefined}
+                />
+                {errorFor('clientSecret') && <p className="form-error" id="client-secret-error">{errorFor('clientSecret')}</p>}
               </div>
             )}
             <div className="form-field">
               <Label htmlFor="callback-url">Callback URL</Label>
-              <Input id="callback-url" value={redirectUri} onChange={(event) => setRedirectUri(event.target.value)} spellCheck={false} />
-              <p>It must exactly match the URL configured in Google Cloud.</p>
+              <Input
+                id="callback-url"
+                className="is-mono"
+                value={redirectUri}
+                onChange={(event) => setRedirectUri(event.target.value)}
+                onBlur={() => markTouched('redirectUri')}
+                spellCheck={false}
+                aria-invalid={errorFor('redirectUri') ? true : undefined}
+                aria-describedby={errorFor('redirectUri') ? 'callback-url-error' : 'callback-url-hint'}
+              />
+              {errorFor('redirectUri')
+                ? <p className="form-error" id="callback-url-error">{errorFor('redirectUri')}</p>
+                : <p className="form-hint" id="callback-url-hint">It must match the redirect URI registered in the developer console exactly.</p>}
             </div>
 
             <button type="button" className="portal-link" onClick={openDeveloperPortal}>Open developer console <ExternalIcon /></button>
@@ -754,7 +805,7 @@ function SettingsDialog({
 
             <DialogFooter className="settings-footer">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-              <Button type="submit" disabled={!canSave || connecting}>{connecting ? <LoaderIcon className="spin" /> : <CloudIcon />} Save and connect</Button>
+              <Button type="submit" disabled={!status.storageEncrypted || connecting}>{connecting ? <LoaderIcon className="spin" /> : <CloudIcon />} Save and connect</Button>
             </DialogFooter>
           </form>
         )}

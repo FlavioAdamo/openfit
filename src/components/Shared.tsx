@@ -3,19 +3,19 @@ import { Card, CardAction, CardHeader } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 import { formatNumber } from '@/lib/format'
 import type { AppIcon } from './icons'
-import { ChevronDownIcon, ChevronUpIcon, MinusIcon } from './icons'
 import { BulletChart } from './Charts'
+
+export type PanelCategory = 'activity' | 'heart' | 'sleep' | 'recovery' | 'body' | 'device'
 
 interface PanelProps {
   children: ReactNode
   className?: string
-  tone?: 'default' | 'mint' | 'blue' | 'violet' | 'amber'
-  category?: 'activity' | 'heart' | 'sleep' | 'recovery' | 'body' | 'device'
+  category?: PanelCategory
   onClick?: () => void
   ariaLabel?: string
 }
 
-export function Panel({ children, className, tone = 'default', category, onClick, ariaLabel }: PanelProps) {
+export function Panel({ children, className, category, onClick, ariaLabel }: PanelProps) {
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!onClick || (event.key !== 'Enter' && event.key !== ' ')) return
     event.preventDefault()
@@ -24,7 +24,7 @@ export function Panel({ children, className, tone = 'default', category, onClick
 
   return (
     <Card
-      className={cn('panel', `tone-${tone}`, onClick && 'is-clickable', className)}
+      className={cn('panel', onClick && 'is-clickable', className)}
       data-category={category}
       onClick={onClick}
       onKeyDown={onKeyDown}
@@ -81,6 +81,7 @@ interface MetricProps {
   goal?: number | null
   icon: AppIcon
   decimals?: number
+  category?: PanelCategory
   onClick?: () => void
 }
 
@@ -91,13 +92,14 @@ export function MetricTile({
   goal = null,
   icon: Icon,
   decimals = 0,
+  category = 'activity',
   onClick,
 }: MetricProps) {
   if (value === null) return null
   const percent = goal && goal > 0 ? value / goal * 100 : null
   const formattedValue = formatNumber(value, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
   return (
-    <Panel className="metric-tile" category="activity" onClick={onClick} ariaLabel={`${label}: ${formattedValue}${unit}`}>
+    <Panel className="metric-tile" category={category} onClick={onClick} ariaLabel={`${label}: ${formattedValue}${unit}`}>
       <div className="metric-tile-head">
         <DuoIcon icon={Icon} />
         <span>{label}</span>
@@ -119,15 +121,6 @@ export function MetricTile({
       ) : null}
     </Panel>
   )
-}
-
-export function Delta({ value, suffix = ' vs. previous period' }: { value: number | null; suffix?: string }) {
-  if (value === null || !Number.isFinite(value)) {
-    return <span className="delta neutral"><MinusIcon aria-hidden="true" /> comparison unavailable</span>
-  }
-  const up = value > 0
-  const Icon = up ? ChevronUpIcon : ChevronDownIcon
-  return <span className={cn('delta', up ? 'up' : 'down')}><Icon aria-hidden="true" /> {Math.abs(value).toFixed(1)}%{suffix}</span>
 }
 
 export function EmptyValue({ children = 'Not available for this device or day.' }: { children?: ReactNode }) {
