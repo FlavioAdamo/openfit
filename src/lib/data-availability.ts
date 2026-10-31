@@ -1,4 +1,4 @@
-import type { DashboardData, PageId } from '@/types'
+import type { DashboardData } from '@/types'
 
 const hasNumber = (value: number | null) => value !== null && Number.isFinite(value)
 
@@ -45,16 +45,6 @@ export function hasBodyData(data: DashboardData) {
     data.body.waterMl,
     data.body.caloriesIn,
   ].some(hasNumber)
-}
-
-export function availablePages(data: DashboardData): PageId[] {
-  const pages: PageId[] = ['today']
-  if (hasActivityData(data)) pages.push('activity')
-  if (hasHealthData(data)) pages.push('health')
-  if (hasSleepData(data)) pages.push('sleep')
-  if (hasBodyData(data)) pages.push('body')
-  pages.push('devices')
-  return pages
 }
 
 export function availableMetricCount(data: DashboardData) {
