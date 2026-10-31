@@ -146,6 +146,7 @@ export default function App() {
   const [trendWindow, setTrendWindow] = useState<TrendWindow>(14)
   const [history, setHistory] = useState<HealthHistory | null>(null)
   const [backfill, setBackfill] = useState<BackfillState>(idleBackfill)
+  const [importingTakeout, setImportingTakeout] = useState(false)
   const selectedDateRef = useRef(selectedDate)
   const dataDateRef = useRef(data.selectedDate)
   const syncingRef = useRef(false)
@@ -293,18 +294,24 @@ export default function App() {
     }
   }, [loadNativeState, runSync])
 
+  // Reads the archive's history again and re-normalizes the shown day with it.
+  const reloadHistory = useCallback(async () => {
+    if (!window.fitbit) return
+    const nextHistory = await window.fitbit.getHistory()
+    historyRef.current = nextHistory
+    setHistory(nextHistory)
+    const payload = payloadRef.current
+    if (payload && payload.date === dataDateRef.current) {
+      setData((current) => ({ ...normalizeFitbitData(payload, nextHistory), source: current.source }))
+    }
+  }, [])
+
   const startBackfill = useCallback(async (days: HistoryWindowDays) => {
     if (!window.fitbit) return
     setBackfill({ running: true, requestedDays: days, progress: null })
     try {
       const result = await window.fitbit.backfillHistory({ days })
-      const nextHistory = await window.fitbit.getHistory()
-      historyRef.current = nextHistory
-      setHistory(nextHistory)
-      const payload = payloadRef.current
-      if (payload && payload.date === dataDateRef.current) {
-        setData((current) => ({ ...normalizeFitbitData(payload, nextHistory), source: current.source }))
-      }
+      await reloadHistory()
       const coverage = result.coverage
       const span = coverage ? `${formatNumber(coverage.dayCount)} days of history` : 'No history'
       setToast({
@@ -320,7 +327,25 @@ export default function App() {
     } finally {
       setBackfill(idleBackfill)
     }
-  }, [])
+  }, [reloadHistory])
+
+  const importTakeout = useCallback(async () => {
+    if (!window.fitbit) return
+    setImportingTakeout(true)
+    try {
+      const result = await window.fitbit.importTakeout()
+      if (result.canceled) return
+      await reloadHistory()
+      const skipped = result.skippedFiles
+        ? ` ${formatNumber(result.skippedFiles)} other ${result.skippedFiles === 1 ? 'file' : 'files'} skipped.`
+        : ''
+      setToast({ tone: 'success', message: `${formatNumber(result.dayCount)} days imported from Takeout.${skipped}` })
+    } catch (error) {
+      setToast({ tone: 'error', message: error instanceof Error ? error.message : 'Takeout import failed.' })
+    } finally {
+      setImportingTakeout(false)
+    }
+  }, [reloadHistory])
 
   const cancelBackfill = useCallback(() => {
     void window.fitbit?.cancelBackfill()
@@ -404,18 +429,25 @@ export default function App() {
     if (!result.canceled) setToast({ tone: 'success', message: 'JSON archive exported.' })
   }
 
-  // Demo data carries its own sample history; a connected account reports the archive's.
-  const backfillPanel = useMemo<BackfillPanelState>(() => ({
-    running: backfill.running,
-    requestedDays: backfill.requestedDays,
-    progress: backfill.progress,
-    coverage: data.source === 'demo'
-      ? historyCoverage(data.history.map((point) => point.date), data.historyUpdatedAt)
-      : historyCoverage(Object.keys(history?.days ?? {}), history?.generatedAt ?? null),
-    lastRun: data.source === 'demo' ? null : history?.lastRun ?? null,
-    onStart: (days) => void startBackfill(days),
-    onCancel: cancelBackfill,
-  }), [backfill, cancelBackfill, data.history, data.historyUpdatedAt, data.source, history, startBackfill])
+  // Demo data carries its own sample history until the archive holds real
+  // days, which a Takeout import can add before any account is connected.
+  const backfillPanel = useMemo<BackfillPanelState>(() => {
+    const archiveDates = Object.keys(history?.days ?? {})
+    const showDemoHistory = data.source === 'demo' && !archiveDates.length
+    return {
+      running: backfill.running,
+      requestedDays: backfill.requestedDays,
+      progress: backfill.progress,
+      coverage: showDemoHistory
+        ? historyCoverage(data.history.map((point) => point.date), data.historyUpdatedAt)
+        : historyCoverage(archiveDates, history?.generatedAt ?? null),
+      lastRun: showDemoHistory ? null : history?.lastRun ?? null,
+      onStart: (days) => void startBackfill(days),
+      onCancel: cancelBackfill,
+      importing: importingTakeout,
+      onImport: () => void importTakeout(),
+    }
+  }, [backfill, cancelBackfill, data.history, data.historyUpdatedAt, data.source, history, importTakeout, importingTakeout, startBackfill])
 
   const currentView = useMemo(() => {
     const props = { data, status, navigate: setPage, trendWindow, onTrendWindowChange: setTrendWindow, backfill: backfillPanel }

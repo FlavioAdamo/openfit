@@ -252,6 +252,13 @@ export interface BackfillResult {
   errorCount: number
 }
 
+export interface TakeoutImportResult {
+  canceled: boolean
+  coverage: HistoryCoverage | null
+  dayCount: number
+  skippedFiles: number
+}
+
 export interface RawHealthArchive {
   version: number
   lastDate: string | null
@@ -289,6 +296,7 @@ export interface FitbitBridge {
   getHistory: () => Promise<HealthHistory | null>
   backfillHistory: (input: { days: HistoryWindowDays }) => Promise<BackfillResult>
   cancelBackfill: () => Promise<void>
+  importTakeout: () => Promise<TakeoutImportResult>
   exportData: () => Promise<{ canceled: boolean; path?: string }>
   openExternal: (url: string) => Promise<void>
   onAuthComplete: (callback: (result: { ok: boolean; error?: string }) => void) => () => void

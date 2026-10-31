@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('fitbit', Object.freeze({
   getHistory: () => ipcRenderer.invoke('fitbit:get-history'),
   backfillHistory: (input) => ipcRenderer.invoke('fitbit:backfill-history', input),
   cancelBackfill: () => ipcRenderer.invoke('fitbit:cancel-backfill'),
+  importTakeout: () => ipcRenderer.invoke('fitbit:import-takeout'),
   exportData: () => ipcRenderer.invoke('fitbit:export-data'),
   openExternal: (url) => ipcRenderer.invoke('fitbit:open-external', url),
   onAuthComplete: (callback) => subscribe('fitbit:auth-complete', callback),

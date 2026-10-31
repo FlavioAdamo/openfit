@@ -53,6 +53,7 @@ describe('preload bridge contract', () => {
       'getHistory',
       'backfillHistory',
       'cancelBackfill',
+      'importTakeout',
       'exportData',
       'openExternal',
       'onAuthComplete',
@@ -70,6 +71,7 @@ describe('preload bridge contract', () => {
     expect(fitbit?.getHistory()).toMatchObject({ channel: 'fitbit:get-history' })
     expect(fitbit?.backfillHistory({ days: 90 })).toMatchObject({ channel: 'fitbit:backfill-history', args: [{ days: 90 }] })
     expect(fitbit?.cancelBackfill()).toMatchObject({ channel: 'fitbit:cancel-backfill' })
+    expect(fitbit?.importTakeout()).toMatchObject({ channel: 'fitbit:import-takeout' })
     expect(fitbit?.exportData()).toMatchObject({ channel: 'fitbit:export-data' })
     expect(fitbit?.openExternal('https://example.test')).toMatchObject({ channel: 'fitbit:open-external', args: ['https://example.test'] })
 
@@ -99,7 +101,7 @@ describe('preload bridge contract', () => {
     expect(handleBackfillProgress).toHaveBeenCalledWith({ completed: 3, total: 40, start: '2026-05-24', end: '2026-06-22' })
     unsubscribeBackfill()
     expect(removeListener).toHaveBeenCalledWith('fitbit:backfill-progress', backfillListener)
-    expect(invoke).toHaveBeenCalledTimes(12)
+    expect(invoke).toHaveBeenCalledTimes(13)
   })
 
   it('exposes the expected health assistant bridge methods and IPC channels', () => {

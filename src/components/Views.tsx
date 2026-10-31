@@ -65,6 +65,8 @@ export interface BackfillPanelState {
   lastRun: HistoryRun | null
   onStart: (days: HistoryWindowDays) => void
   onCancel: () => void
+  importing: boolean
+  onImport: () => void
 }
 
 interface ViewProps {
@@ -1014,13 +1016,13 @@ function longDate(value: string) {
 }
 
 function HistoryPanel({ status, backfill }: { status: FitbitAuthStatus; backfill: BackfillPanelState }) {
-  const { coverage, lastRun, progress, running } = backfill
+  const { coverage, importing, lastRun, progress, running } = backfill
   const blocker = !status.isElectron
     ? 'Launch OpenFit in the Electron app to load history.'
     : !status.connected
-    ? 'Connect Google Health to load history.'
+    ? 'Connect Google Health to download history, or import a Takeout folder.'
     : status.provider !== 'google-health'
-    ? 'Long-term history needs Google Health.'
+    ? 'Downloads need Google Health. You can still import a Takeout folder.'
     : null
   const percent = progress && progress.total > 0 ? Math.round(progress.completed / progress.total * 100) : null
   const requested = historyRanges.find((item) => item.days === backfill.requestedDays)
@@ -1048,7 +1050,7 @@ function HistoryPanel({ status, backfill }: { status: FitbitAuthStatus; backfill
       <p className="history-copy">
         {coverage
           ? `${longDate(coverage.start)} to ${longDate(coverage.end)}${coverage.generatedAt ? ` · updated ${relativeTime(coverage.generatedAt)}` : ''}`
-          : 'No long-term history yet. Load up to a year of daily summaries from Google Health.'}
+          : 'No long-term history yet. Load up to a year of daily summaries from Google Health, or import a Google Takeout export.'}
       </p>
       {running && (
         <div className="history-progress-row" role="status" aria-live="polite">
@@ -1069,10 +1071,13 @@ function HistoryPanel({ status, backfill }: { status: FitbitAuthStatus; backfill
         {running
           ? <Button variant="outline" size="sm" onClick={backfill.onCancel}>Stop</Button>
           : historyRanges.map((item) => (
-              <Button key={item.days} variant="outline" size="sm" disabled={blocker !== null} onClick={() => backfill.onStart(item.days)}>
+              <Button key={item.days} variant="outline" size="sm" disabled={blocker !== null || importing} onClick={() => backfill.onStart(item.days)}>
                 {item.label}
               </Button>
             ))}
+        <Button variant="outline" size="sm" disabled={!status.isElectron || running || importing} onClick={backfill.onImport}>
+          {importing ? 'Importing…' : 'Import Takeout folder'}
+        </Button>
       </div>
       {(blocker || lastRunCopy) && <p className="history-note">{blocker ?? lastRunCopy}</p>}
     </Panel>
