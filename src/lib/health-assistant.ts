@@ -145,6 +145,7 @@ export function buildHealthAssistantContext(
 ) {
   const days = new Map<string, unknown>()
 
+  for (const point of current.history) days.set(point.date, compactTrend(point))
   for (const trend of current.trends) days.set(trend.date, compactTrend(trend))
   for (const day of archiveDays) days.set(day.selectedDate, compactDay(day))
   days.set(current.selectedDate, compactDay(current))

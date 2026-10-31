@@ -3,7 +3,11 @@ import { describe, expect, it } from 'vitest'
 
 const require = createRequire(import.meta.url)
 const { __test } = require('./google-health-service.cjs') as {
-  __test: { translateGoogleHealth: (raw: Record<string, any>, date: string) => Record<string, any> }
+  __test: {
+    translateGoogleHealth: (raw: Record<string, any>, date: string) => Record<string, any>
+    translateHistory: (raw: Record<string, any>) => Record<string, Record<string, number | null>>
+    dateChunks: (start: string, end: string, size?: number) => Array<{ start: string; end: string }>
+  }
 }
 
 const civil = (date: string) => {
@@ -155,5 +159,42 @@ describe('Google Health adapter', () => {
     expect(endpoints.activity.summary.steps).toBe(0)
     expect(endpoints.activity.summary.fairlyActiveMinutes).toBeNull()
     expect(endpoints.activity.summary.veryActiveMinutes).toBeNull()
+  })
+
+  it('translates a range of daily summaries into history days', () => {
+    const days = __test.translateHistory({
+      stepsDaily: { rollupDataPoints: [
+        daily('2026-05-01', { steps: { countSum: '8000' } }),
+        daily('2026-05-02', { steps: { countSum: '6500' } }),
+      ] },
+      distanceDaily: { rollupDataPoints: [daily('2026-05-01', { distance: { millimetersSum: '5000000' } })] },
+      activeMinutesDaily: { rollupDataPoints: [daily('2026-05-02', { activeMinutes: { activeMinutesRollupByActivityLevel: [
+        { activityLevel: 'MODERATE', activeMinutesSum: '10' },
+        { activityLevel: 'VIGOROUS', activeMinutesSum: '5' },
+      ] } })] },
+      restingHeartRaw: { dataPoints: [{ dailyRestingHeartRate: { date: { year: 2026, month: 5, day: 1 }, beatsPerMinute: '58' } }] },
+      spo2Raw: { dataPoints: [{ dailyOxygenSaturation: { date: { year: 2026, month: 5, day: 3 }, averagePercentage: 96.4 } }] },
+      sleepRaw: { dataPoints: [{ sleep: {
+        interval: { civilEndTime: civil('2026-05-02'), startTime: '2026-05-01T22:00:00Z', endTime: '2026-05-02T06:00:00Z' },
+        metadata: { nap: false },
+        summary: { minutesAsleep: '400', minutesInSleepPeriod: '450' },
+      } }] },
+    })
+
+    expect(Object.keys(days)).toEqual(['2026-05-01', '2026-05-02', '2026-05-03'])
+    expect(days['2026-05-01']).toMatchObject({ steps: 8000, distanceKm: 5, restingHeartRate: 58, activeMinutes: null, sleepMinutes: null })
+    expect(days['2026-05-02']).toMatchObject({ steps: 6500, activeMinutes: 15, sleepMinutes: 400, sleepEfficiency: 89, sleepScore: null })
+    expect(days['2026-05-03']).toMatchObject({ steps: null, spo2: 96.4 })
+  })
+
+  it('splits history ranges into inclusive chunks, newest first', () => {
+    expect(__test.dateChunks('2026-06-22', '2026-06-22', 30)).toEqual([{ start: '2026-06-22', end: '2026-06-22' }])
+    expect(__test.dateChunks('2026-05-24', '2026-06-22', 30)).toEqual([{ start: '2026-05-24', end: '2026-06-22' }])
+    expect(__test.dateChunks('2026-04-01', '2026-06-22', 30)).toEqual([
+      { start: '2026-05-24', end: '2026-06-22' },
+      { start: '2026-04-24', end: '2026-05-23' },
+      { start: '2026-04-01', end: '2026-04-23' },
+    ])
+    expect(__test.dateChunks('2026-06-23', '2026-06-22', 30)).toEqual([])
   })
 })

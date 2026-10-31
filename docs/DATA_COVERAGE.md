@@ -26,6 +26,15 @@ The Google sync performs independent reads and keeps useful payloads in the expo
 
 Depending on regional and account availability, Fitbit Air supports 24/7 heart rate, steps, calories, distance, Active Zone Minutes, sleep and sleep stages, SpO2, HRV, respiratory rate, skin temperature, resting HR, and irregular rhythm notifications. It does not produce an on-demand ECG. The related section is hidden when the data is unavailable.
 
+## Long-term history
+
+The Data page can load daily summaries for the last 30, 90, or 365 days from Google Health. Each run reads the whole range again in 30-day chunks, newest first, and merges it into the encrypted archive. Newer values replace stored ones, and missing values never erase them.
+
+- Only daily values are stored: steps, calories, distance, floors, active and zone minutes, sedentary time, resting heart rate, HRV, breathing rate, SpO2, skin and body temperature, cardio fitness, sleep duration and efficiency, weight, body fat, water, and calories logged.
+- Hourly steps, heart rate samples, sleep stages, workouts, ECG, and irregular rhythm records are not part of the history. They load for a day when you open it.
+- Sleep score is not exposed by Google Health and stays empty.
+- The legacy Fitbit adapter does not provide history.
+
 ## Hard Limits
 
 - Data appears only after synchronization with the mobile app. There is no public BLE stream for desktop apps.

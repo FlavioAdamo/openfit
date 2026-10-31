@@ -65,9 +65,22 @@ exchangeAuthorizationCode(config, code, verifier)
 refreshAccessToken(config, token)
 revokeToken(token)
 syncData(accessToken, date, onProgress)
+syncHistory(accessToken, { start, end }, { onProgress, onChunk, signal })   // optional
 ```
 
 The main process selects the adapter from `config.provider`. The UI always receives the same `RawFitbitPayload` contract, then `normalizeFitbitData` converts it into `DashboardData`.
+
+`syncHistory` is implemented by the Google Health adapter only. It splits the range into 30-day chunks, newest first, runs the daily rollup and daily record reads for each chunk, and hands every finished chunk to `onChunk` as provider-independent `HistoryDay` records so the main process can persist progressively. A 401 aborts the run; other failures are recorded per request and returned with the result.
+
+## Local Archive
+
+The encrypted cache is one `safeStorage` file, version 3:
+
+- `days` holds one `RawFitbitPayload` per visited date, so completed days open without provider requests.
+- `history` holds daily summaries over a long range, with `generatedAt` and the last run's range, errors, and cancellation flag. `storeHistory` merges by date: incoming numbers replace stored ones, and nulls keep them.
+- Every write goes through one promise-chained queue in the main process, so a day sync during a backfill cannot overwrite the history.
+
+In the renderer, `normalizeFitbitData(payload, history)` merges both sources per date. The fresher source wins field by field and the other one fills gaps. `trends` keeps the 14-day series the day payload defines, so Today is unchanged. `history` holds every merged day up to the selected date, and the 30, 90, and 365-day trend windows are cut from it.
 
 ## Resilience
 

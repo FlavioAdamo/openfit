@@ -20,10 +20,16 @@ const SCOPES = [
   'https://www.googleapis.com/auth/googlehealth.sleep.readonly',
 ]
 
+// Google Health allows fewer than five requests per second per user.
+const API_REQUEST_SPACING_MS = 225
+// History ranges are fetched in fixed windows so a cancel keeps finished chunks.
+const HISTORY_CHUNK_DAYS = 30
+
 let nextApiRequestAt = 0
 
-function fetchWithTimeout(url, options = {}, timeoutMs = 15_000) {
-  return fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) })
+function fetchWithTimeout(url, options = {}, timeoutMs = 15_000, signal = null) {
+  const timeout = AbortSignal.timeout(timeoutMs)
+  return fetch(url, { ...options, signal: signal ? AbortSignal.any([signal, timeout]) : timeout })
 }
 
 function base64Url(buffer) {
@@ -104,15 +110,33 @@ async function revokeToken(token) {
   if (!response.ok) throw new Error(`Google did not confirm token revocation (${response.status}).`)
 }
 
-async function waitForApiSlot() {
+async function waitForApiSlot(signal = null) {
+  signal?.throwIfAborted()
   const now = Date.now()
   const slot = Math.max(now, nextApiRequestAt)
-  nextApiRequestAt = slot + 225
-  if (slot > now) await new Promise((resolve) => setTimeout(resolve, slot - now))
+  nextApiRequestAt = slot + API_REQUEST_SPACING_MS
+  if (slot > now) await sleep(slot - now, signal)
 }
 
-async function request(path, accessToken, { method = 'GET', body, retryCount = 0 } = {}) {
-  await waitForApiSlot()
+function sleep(ms, signal = null) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    function onAbort() {
+      clearTimeout(timer)
+      reject(signal.reason)
+    }
+    if (signal) {
+      if (signal.aborted) return onAbort()
+      signal.addEventListener('abort', onAbort, { once: true })
+    }
+  })
+}
+
+async function request(path, accessToken, { method = 'GET', body, retryCount = 0, signal = null } = {}) {
+  await waitForApiSlot(signal)
   const response = await fetchWithTimeout(path.startsWith('http') ? path : `${API_BASE}${path}`, {
     method,
     headers: {
@@ -121,14 +145,14 @@ async function request(path, accessToken, { method = 'GET', body, retryCount = 0
       ...(body ? { 'content-type': 'application/json' } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
-  })
+  }, 15_000, signal)
   if (response.status === 429 && retryCount < 2) {
     const retryAfter = Number(response.headers.get('retry-after'))
     const delay = Number.isFinite(retryAfter) && retryAfter > 0
       ? Math.min(30_000, retryAfter * 1000)
       : Math.min(30_000, 1_100 * (2 ** retryCount))
-    await new Promise((resolve) => setTimeout(resolve, delay))
-    return request(path, accessToken, { method, body, retryCount: retryCount + 1 })
+    await sleep(delay, signal)
+    return request(path, accessToken, { method, body, retryCount: retryCount + 1, signal })
   }
   const payload = await response.json().catch(() => ({}))
   if (!response.ok) {
@@ -184,7 +208,7 @@ function dataFilter(type, recordType, start, end) {
   return `${type.replaceAll('-', '_')}.interval.civil_start_time >= "${start}" AND ${type.replaceAll('-', '_')}.interval.civil_start_time < "${end}"`
 }
 
-async function listData(accessToken, type, recordType, start, end, dataSourceFamily = 'all-sources', operation = 'reconcile') {
+async function listData(accessToken, type, recordType, start, end, dataSourceFamily = 'all-sources', operation = 'reconcile', { signal = null } = {}) {
   const baseParams = {
     filter: dataFilter(type, recordType, start, end),
     pageSize: type === 'sleep' || type === 'exercise' ? '25' : '10000',
@@ -197,7 +221,7 @@ async function listData(accessToken, type, recordType, start, end, dataSourceFam
   do {
     const params = new URLSearchParams(baseParams)
     if (pageToken) params.set('pageToken', pageToken)
-    const page = await request(`/users/me/dataTypes/${type}/${endpoint}?${params}`, accessToken)
+    const page = await request(`/users/me/dataTypes/${type}/${endpoint}?${params}`, accessToken, { signal })
     if (Array.isArray(page.dataPoints)) merged.dataPoints.push(...page.dataPoints)
     pageToken = page.nextPageToken || ''
     pageCount += 1
@@ -206,9 +230,10 @@ async function listData(accessToken, type, recordType, start, end, dataSourceFam
   return merged
 }
 
-function dailyRollup(accessToken, type, start, end) {
+function dailyRollup(accessToken, type, start, end, { signal = null } = {}) {
   return request(`/users/me/dataTypes/${type}/dataPoints:dailyRollUp`, accessToken, {
     method: 'POST',
+    signal,
     body: {
       range: {
         start: civilDateTime(start),
@@ -217,6 +242,33 @@ function dailyRollup(accessToken, type, start, end) {
       windowSizeDays: 1,
     },
   })
+}
+
+// Daily summaries over [start, end): shared by the day sync, which reads the
+// 14 days before the selected date, and the history sync, which reads chunks.
+function dailySummaryJobs(accessToken, start, end, signal = null) {
+  const options = { signal }
+  return [
+    ['stepsDaily', () => dailyRollup(accessToken, 'steps', start, end, options)],
+    ['caloriesDaily', () => dailyRollup(accessToken, 'total-calories', start, end, options)],
+    ['distanceDaily', () => dailyRollup(accessToken, 'distance', start, end, options)],
+    ['floorsDaily', () => dailyRollup(accessToken, 'floors', start, end, options)],
+    ['activeMinutesDaily', () => dailyRollup(accessToken, 'active-minutes', start, end, options)],
+    ['zoneMinutesDaily', () => dailyRollup(accessToken, 'active-zone-minutes', start, end, options)],
+    ['sedentaryDaily', () => dailyRollup(accessToken, 'sedentary-period', start, end, options)],
+    ['weightDaily', () => dailyRollup(accessToken, 'weight', start, end, options)],
+    ['fatDaily', () => dailyRollup(accessToken, 'body-fat', start, end, options)],
+    ['waterDaily', () => dailyRollup(accessToken, 'hydration-log', start, end, options)],
+    ['nutritionDaily', () => dailyRollup(accessToken, 'nutrition-log', start, end, options)],
+    ['coreTemperatureDaily', () => dailyRollup(accessToken, 'core-body-temperature', start, end, options)],
+    ['restingHeartRaw', () => listData(accessToken, 'daily-resting-heart-rate', 'daily', start, end, 'all-sources', 'reconcile', options)],
+    ['hrvRaw', () => listData(accessToken, 'daily-heart-rate-variability', 'daily', start, end, 'all-sources', 'reconcile', options)],
+    ['spo2Raw', () => listData(accessToken, 'daily-oxygen-saturation', 'daily', start, end, 'all-sources', 'reconcile', options)],
+    ['breathingRaw', () => listData(accessToken, 'daily-respiratory-rate', 'daily', start, end, 'all-sources', 'reconcile', options)],
+    ['skinTemperatureRaw', () => listData(accessToken, 'daily-sleep-temperature-derivations', 'daily', start, end, 'all-sources', 'reconcile', options)],
+    ['cardioRaw', () => listData(accessToken, 'daily-vo2-max', 'daily', start, end, 'all-sources', 'reconcile', options)],
+    ['sleepRaw', () => listData(accessToken, 'sleep', 'sleep', start, end, 'google-wearables', 'reconcile', options)],
+  ]
 }
 
 async function syncGoogleHealthData(accessToken, selectedDate, onProgress = () => {}) {
@@ -229,27 +281,9 @@ async function syncGoogleHealthData(accessToken, selectedDate, onProgress = () =
     ['settingsRaw', () => request('/users/me/settings', accessToken)],
     ['devicesRaw', () => request('/users/me/pairedDevices?pageSize=100', accessToken)],
     ['userInfo', () => request('https://www.googleapis.com/oauth2/v3/userinfo', accessToken)],
-    ['stepsDaily', () => dailyRollup(accessToken, 'steps', trendStart, dayAfter)],
-    ['caloriesDaily', () => dailyRollup(accessToken, 'total-calories', trendStart, dayAfter)],
-    ['distanceDaily', () => dailyRollup(accessToken, 'distance', trendStart, dayAfter)],
-    ['floorsDaily', () => dailyRollup(accessToken, 'floors', trendStart, dayAfter)],
-    ['activeMinutesDaily', () => dailyRollup(accessToken, 'active-minutes', trendStart, dayAfter)],
-    ['zoneMinutesDaily', () => dailyRollup(accessToken, 'active-zone-minutes', trendStart, dayAfter)],
-    ['sedentaryDaily', () => dailyRollup(accessToken, 'sedentary-period', trendStart, dayAfter)],
-    ['weightDaily', () => dailyRollup(accessToken, 'weight', trendStart, dayAfter)],
-    ['fatDaily', () => dailyRollup(accessToken, 'body-fat', trendStart, dayAfter)],
-    ['waterDaily', () => dailyRollup(accessToken, 'hydration-log', trendStart, dayAfter)],
-    ['nutritionDaily', () => dailyRollup(accessToken, 'nutrition-log', trendStart, dayAfter)],
-    ['coreTemperatureDaily', () => dailyRollup(accessToken, 'core-body-temperature', trendStart, dayAfter)],
+    ...dailySummaryJobs(accessToken, trendStart, dayAfter),
     ['stepsIntradayRaw', () => listData(accessToken, 'steps', 'interval', selectedDate, dayAfter, 'google-wearables')],
     ['heartIntradayRaw', () => listData(accessToken, 'heart-rate', 'sample', selectedDate, dayAfter, 'google-wearables')],
-    ['restingHeartRaw', () => listData(accessToken, 'daily-resting-heart-rate', 'daily', trendStart, dayAfter)],
-    ['hrvRaw', () => listData(accessToken, 'daily-heart-rate-variability', 'daily', trendStart, dayAfter)],
-    ['spo2Raw', () => listData(accessToken, 'daily-oxygen-saturation', 'daily', trendStart, dayAfter)],
-    ['breathingRaw', () => listData(accessToken, 'daily-respiratory-rate', 'daily', trendStart, dayAfter)],
-    ['skinTemperatureRaw', () => listData(accessToken, 'daily-sleep-temperature-derivations', 'daily', trendStart, dayAfter)],
-    ['cardioRaw', () => listData(accessToken, 'daily-vo2-max', 'daily', trendStart, dayAfter)],
-    ['sleepRaw', () => listData(accessToken, 'sleep', 'sleep', trendStart, dayAfter, 'google-wearables')],
     ['activitiesRaw', () => listData(accessToken, 'exercise', 'session', trendStart, dayAfter)],
     ['ecgRaw', () => listData(accessToken, 'electrocardiogram', 'ecg', ecgStart, dayAfter, 'all-sources', 'list')],
     ['irnProfileRaw', () => request('/users/me/irnProfile', accessToken)],
@@ -383,7 +417,8 @@ function toLegacySleep(point) {
   }
 }
 
-function translateGoogleHealth(raw, selectedDate) {
+// Per-date maps for every daily summary type, shared by the day payload and the history archive.
+function dailySeries(raw) {
   const steps = dailyMap(raw.stepsDaily, (point) => numeric(point.steps?.countSum))
   const calories = dailyMap(raw.caloriesDaily, (point) => numeric(point.totalCalories?.kcalSum))
   const distance = dailyMap(raw.distanceDaily, (point) => numeric(point.distance?.millimetersSum, (value) => value / 1_000_000))
@@ -424,13 +459,7 @@ function translateGoogleHealth(raw, selectedDate) {
     }
   })
   const cardio = dailyRecordMap(raw.cardioRaw, 'dailyVo2Max', (record) => numeric(record?.vo2Max))
-  const selectedActivityLevels = selected(activeMinutes, selectedDate)
-  const todayActivityLevels = selectedActivityLevels || {}
   const sleepRecords = dataPoints(raw.sleepRaw).map(toLegacySleep)
-  const selectedSleepRecords = sleepRecords.filter((item) => item.dateOfSleep === selectedDate)
-  const selectedSleep = selectedSleepRecords.find((item) => item.isMainSleep)
-    || selectedSleepRecords.sort((a, b) => b.minutesAsleep - a.minutesAsleep)[0]
-    || null
   const allDates = [...new Set([
     ...steps.keys(),
     ...calories.keys(),
@@ -463,6 +492,63 @@ function translateGoogleHealth(raw, selectedDate) {
     if (moderate === null && vigorous === null) return null
     return (moderate || 0) + (vigorous || 0)
   }
+  return {
+    steps,
+    calories,
+    distance,
+    floors,
+    activeMinutes,
+    zoneMinutes,
+    sedentary,
+    weights,
+    bodyFat,
+    water,
+    nutrition,
+    coreTemperature,
+    restingHeart,
+    hrv,
+    spo2,
+    breathing,
+    skinTemp,
+    cardio,
+    sleepRecords,
+    sleepByDate,
+    allDates,
+    activeMinutesFor,
+  }
+}
+
+function translateGoogleHealth(raw, selectedDate) {
+  const {
+    steps,
+    calories,
+    distance,
+    floors,
+    activeMinutes,
+    zoneMinutes,
+    sedentary,
+    weights,
+    bodyFat,
+    water,
+    nutrition,
+    coreTemperature,
+    restingHeart,
+    hrv,
+    spo2,
+    breathing,
+    skinTemp,
+    cardio,
+    sleepRecords,
+    sleepByDate,
+    allDates,
+    activeMinutesFor,
+  } = dailySeries(raw)
+  const selectedActivityLevels = selected(activeMinutes, selectedDate)
+  const todayActivityLevels = selectedActivityLevels || {}
+  const selectedSleepRecords = sleepRecords.filter((item) => item.dateOfSleep === selectedDate)
+  const selectedSleep = selectedSleepRecords.find((item) => item.isMainSleep)
+    || selectedSleepRecords.sort((a, b) => b.minutesAsleep - a.minutesAsleep)[0]
+    || null
   const stepPoints = dataPoints(raw.stepsIntradayRaw).map((point) => {
     const record = point.steps || {}
     const time = timeFromCivil(record.interval?.civilStartTime) || record.interval?.startTime?.slice(11, 16)
@@ -621,6 +707,100 @@ function translateGoogleHealth(raw, selectedDate) {
   }
 }
 
+// Provider-independent daily summaries for every date in the chunk.
+function translateHistory(raw) {
+  const series = dailySeries(raw)
+  const days = {}
+  for (const date of series.allDates) {
+    days[date] = {
+      steps: series.steps.get(date) ?? null,
+      calories: series.calories.get(date) ?? null,
+      distanceKm: series.distance.get(date) ?? null,
+      floors: series.floors.get(date) ?? null,
+      activeMinutes: series.activeMinutesFor(date),
+      zoneMinutes: series.zoneMinutes.get(date) ?? null,
+      sedentaryMinutes: series.sedentary.get(date) ?? null,
+      restingHeartRate: series.restingHeart.get(date) ?? null,
+      hrvMs: series.hrv.get(date)?.averageMs ?? null,
+      breathingRate: series.breathing.get(date) ?? null,
+      spo2: series.spo2.get(date)?.average ?? null,
+      skinTemperature: series.skinTemp.get(date)?.relative ?? null,
+      coreTemperature: series.coreTemperature.get(date) ?? null,
+      cardioScore: series.cardio.get(date) ?? null,
+      sleepMinutes: series.sleepByDate.get(date)?.minutesAsleep ?? null,
+      sleepScore: null,
+      sleepEfficiency: series.sleepByDate.get(date)?.efficiency ?? null,
+      weight: series.weights.get(date) ?? null,
+      bodyFat: series.bodyFat.get(date) ?? null,
+      waterMl: series.water.get(date) ?? null,
+      caloriesIn: series.nutrition.get(date) ?? null,
+    }
+  }
+  return days
+}
+
+// Inclusive date windows covering [start, end], newest first.
+function dateChunks(start, end, size = HISTORY_CHUNK_DAYS) {
+  const chunks = []
+  let chunkEnd = end
+  while (chunkEnd >= start) {
+    const chunkStart = shiftIso(chunkEnd, -(size - 1))
+    chunks.push({ start: chunkStart < start ? start : chunkStart, end: chunkEnd })
+    chunkEnd = shiftIso(chunkStart, -1)
+  }
+  return chunks
+}
+
+async function syncGoogleHealthHistory(accessToken, range, { onProgress = () => {}, onChunk = async () => {}, signal = null } = {}) {
+  const chunks = dateChunks(range.start, range.end)
+  if (!chunks.length) throw new Error('The history range is empty.')
+  const jobsPerChunk = dailySummaryJobs(accessToken, range.start, range.end).length
+  const total = chunks.length * jobsPerChunk
+  const errors = []
+  let completed = 0
+  let cancelled = false
+
+  for (const chunk of chunks) {
+    if (signal?.aborted) {
+      cancelled = true
+      break
+    }
+    const jobs = dailySummaryJobs(accessToken, chunk.start, shiftIso(chunk.end, 1), signal)
+    const raw = {}
+    const chunkErrors = []
+    await Promise.all(jobs.map(async ([key, run]) => {
+      try {
+        raw[key] = await run()
+      } catch (error) {
+        if (!signal?.aborted) {
+          chunkErrors.push({ key, chunkStart: chunk.start, message: error.message || 'Source unavailable', status: error.status })
+        }
+      } finally {
+        completed += 1
+        onProgress({ completed, total, start: chunk.start, end: chunk.end })
+      }
+    }))
+    if (signal?.aborted) {
+      cancelled = true
+      break
+    }
+    if (chunkErrors.some((error) => error.status === 401)) {
+      throw new Error('The Google Health authorization is no longer valid. Reconnect the account.')
+    }
+    errors.push(...chunkErrors)
+    await onChunk({ start: chunk.start, end: chunk.end, days: translateHistory(raw), errors: chunkErrors })
+  }
+
+  return {
+    source: 'google-health',
+    generatedAt: new Date().toISOString(),
+    range,
+    cancelled,
+    errors,
+    requestStats: { total, completed, failed: errors.length },
+  }
+}
+
 module.exports = {
   provider: 'google-health',
   scopes: SCOPES,
@@ -630,5 +810,6 @@ module.exports = {
   refreshAccessToken,
   revokeToken,
   syncData: syncGoogleHealthData,
-  __test: { translateGoogleHealth, dateFromCivil, durationSeconds },
+  syncHistory: syncGoogleHealthHistory,
+  __test: { translateGoogleHealth, translateHistory, dateChunks, dateFromCivil, durationSeconds },
 }

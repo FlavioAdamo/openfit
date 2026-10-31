@@ -235,5 +235,46 @@ describe('normalizeFitbitData', () => {
     expect(result.trends).toHaveLength(2)
     expect(result.trends[0]).toMatchObject({ hrvMs: 44, spo2: 96.8, breathingRate: 14.4, skinTemperature: -0.1 })
     expect(result.trends[1]).toMatchObject({ hrvMs: 48, spo2: 97.2, breathingRate: 14.8, skinTemperature: 0.2 })
+    expect(result.history).toEqual(result.trends)
+    expect(result.historyUpdatedAt).toBeNull()
+  })
+
+  it('merges the archive history into trends, letting the fresher source win', () => {
+    const payload: RawFitbitPayload = {
+      source: 'google-health',
+      date: '2026-06-22',
+      generatedAt: '2026-06-22T12:00:00.000Z',
+      endpoints: {
+        metricTrends: {
+          values: [
+            { dateTime: '2026-06-21', hrvMs: 44 },
+            { dateTime: '2026-06-22', hrvMs: 48 },
+          ],
+        },
+      },
+      errors: [],
+      rateLimit: { limit: null, remaining: null, resetSeconds: null },
+    }
+    const history = (generatedAt: string) => ({
+      source: 'google-health' as const,
+      generatedAt,
+      lastRun: null,
+      days: {
+        '2026-05-01': { steps: 8000 },
+        '2026-06-21': { steps: 5000, hrvMs: 40 },
+        '2026-06-23': { steps: 1 },
+      } as Record<string, any>,
+    })
+
+    const fresher = normalizeFitbitData(payload, history('2026-06-23T08:00:00.000Z'))
+    expect(fresher.history.map((point) => point.date)).toEqual(['2026-05-01', '2026-06-21', '2026-06-22'])
+    expect(fresher.trends.map((point) => point.date)).toEqual(['2026-06-21', '2026-06-22'])
+    expect(fresher.trends[0]).toMatchObject({ steps: 5000, hrvMs: 40 })
+    expect(fresher.trends[1]).toMatchObject({ steps: null, hrvMs: 48 })
+    expect(fresher.history[0]).toMatchObject({ steps: 8000, label: 'Fri' })
+    expect(fresher.historyUpdatedAt).toBe('2026-06-23T08:00:00.000Z')
+
+    const older = normalizeFitbitData(payload, history('2026-06-20T08:00:00.000Z'))
+    expect(older.trends[0]).toMatchObject({ steps: 5000, hrvMs: 44 })
   })
 })

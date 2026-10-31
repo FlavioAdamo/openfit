@@ -1,9 +1,21 @@
 import type { ReactNode } from 'react'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
-import type { ActivityItem, DashboardData, FitbitAuthStatus, PageId, TimePoint } from '@/types'
+import type {
+  ActivityItem,
+  BackfillProgress,
+  DashboardData,
+  FitbitAuthStatus,
+  HistoryCoverage,
+  HistoryRun,
+  HistoryWindowDays,
+  PageId,
+  TimePoint,
+  TrendPoint,
+} from '@/types'
 import { BulletChart, ColumnChart, LineChart, RadialProgress, SleepStageBar, SleepStageTimeline } from './Charts'
-import { DuoIcon, EmptyValue, MetricTile, Panel, PanelHeader } from './Shared'
+import { DuoIcon, EmptyValue, MetricTile, Panel, PanelHeader, TrendWindowControl } from './Shared'
 import type { AppIcon } from './icons'
 import {
   ActiveIcon,
@@ -43,11 +55,25 @@ import {
 import { availableMetricCount, hasActivityData, hasBodyData, hasHealthData, hasSleepData } from '@/lib/data-availability'
 import { analyzeHome } from '@/lib/home-analysis'
 import type { BaselineComparison } from '@/lib/home-analysis'
+import { WEEKLY_BUCKET_THRESHOLD, availableWindows, weeklyBuckets, windowPoints, type TrendWindow } from '@/lib/trend-window'
+
+export interface BackfillPanelState {
+  running: boolean
+  requestedDays: HistoryWindowDays | null
+  progress: BackfillProgress | null
+  coverage: HistoryCoverage | null
+  lastRun: HistoryRun | null
+  onStart: (days: HistoryWindowDays) => void
+  onCancel: () => void
+}
 
 interface ViewProps {
   data: DashboardData
   status: FitbitAuthStatus
   navigate: (page: PageId) => void
+  trendWindow: TrendWindow
+  onTrendWindowChange: (window: TrendWindow) => void
+  backfill: BackfillPanelState
 }
 
 interface Signal {
@@ -179,15 +205,38 @@ function CompactActivity({ item, detailed = false }: { item: ActivityItem; detai
   )
 }
 
-function trendLabels(data: DashboardData) {
-  return data.trends.map((point) => formatDate(point.date, { day: 'numeric', month: 'short' }))
+function pointLabels(points: TrendPoint[]) {
+  return points.map((point) => formatDate(point.date, { day: 'numeric', month: 'short' }))
 }
 
-function trendXValues(data: DashboardData) {
-  return data.trends.map((point, index) => {
+function pointXValues(points: Array<{ date: string }>) {
+  return points.map((point, index) => {
     const value = new Date(`${point.date}T12:00:00`).getTime()
     return Number.isFinite(value) ? value : index
   })
+}
+
+// The requested window is clamped to what the history can show. At 14 days the
+// day payload's own trend series is kept, so the short charts stay as they were.
+function resolveTrendWindow(data: DashboardData, requested: TrendWindow) {
+  const options = availableWindows(data.history, data.selectedDate)
+  const range = options.includes(requested) ? requested : options.at(-1) ?? 14
+  const points = range === 14 ? data.trends : windowPoints(data.history, data.selectedDate, range)
+  return { options, range, points }
+}
+
+// Column charts above the weekly threshold show one bar per week instead of per day.
+function columnSeries(points: TrendPoint[], range: TrendWindow, select: (point: TrendPoint) => number | null) {
+  if (range <= WEEKLY_BUCKET_THRESHOLD) {
+    return { values: points.map(select), labels: pointLabels(points), xValues: pointXValues(points), weekly: false }
+  }
+  const buckets = weeklyBuckets(points, select)
+  return {
+    values: buckets.map((bucket) => bucket.value),
+    labels: buckets.map((bucket) => bucket.label),
+    xValues: pointXValues(buckets),
+    weekly: true,
+  }
 }
 
 function timeXValues(labels: string[]) {
@@ -232,22 +281,23 @@ const trendColors: Record<HomeCategory, string> = {
 }
 
 function MetricTrendPanel({
-  data,
+  points,
   category,
   icon,
   title,
-  values,
+  select,
   formatter,
   target = null,
 }: {
-  data: DashboardData
+  points: TrendPoint[]
   category: HomeCategory
   icon: AppIcon
   title: string
-  values: Array<number | null>
+  select: (point: TrendPoint) => number | null
   formatter: (value: number) => string
   target?: number | null
 }) {
+  const values = points.map(select)
   const count = values.filter(hasValue).length
   if (count < 2) return null
   const latest = [...values].reverse().find(hasValue) ?? null
@@ -261,8 +311,8 @@ function MetricTrendPanel({
       />
       <LineChart
         values={values}
-        labels={trendLabels(data)}
-        xValues={trendXValues(data)}
+        labels={pointLabels(points)}
+        xValues={pointXValues(points)}
         target={target}
         color={trendColors[category]}
         height={156}
@@ -270,7 +320,7 @@ function MetricTrendPanel({
         showRangeLabels
         variant="area"
         formatter={formatter}
-        ariaLabel={`${title} during the synced period`}
+        ariaLabel={`${title} over the selected period`}
       />
     </Panel>
   )
@@ -371,8 +421,8 @@ export function TodayView({ data, navigate }: ViewProps) {
   const stepsTrendCount = stepsTrend.filter(hasValue).length
   const sleepTrendCount = sleepTrend.filter(hasValue).length
   const restingHeartTrendCount = restingHeartTrend.filter(hasValue).length
-  const labels = trendLabels(data)
-  const xValues = trendXValues(data)
+  const labels = pointLabels(data.trends)
+  const xValues = pointXValues(data.trends)
   const sleepGoalNote = data.sleep.totalMinutes === null ? 'Duration unavailable' : analysis.sleepGoalDifference === null
     ? baselineNote(analysis.sleep, 'min')
     : `${formatMinutes(analysis.sleepGoalDifference)} · goal`
@@ -437,7 +487,7 @@ export function TodayView({ data, navigate }: ViewProps) {
                 <PanelHeader title="Movement" icon={StepsIcon} action={<ChevronRightIcon aria-hidden="true" />} />
                 <div className="home-card-lead">
                   <div><strong>{formatNumber(steps)}</strong><span>steps</span></div>
-                  {data.activity.stepsGoal !== null && data.activity.stepsGoal > 0 && <RadialProgress value={steps} max={data.activity.stepsGoal} color="var(--category-activity)" label="goal" valueLabel={`${Math.round(steps / data.activity.stepsGoal * 100)}%`} size={78} />}
+                  {data.activity.stepsGoal !== null && data.activity.stepsGoal > 0 && <RadialProgress value={steps} max={data.activity.stepsGoal} color="var(--category-activity)" label="goal" valueLabel={`${Math.round(steps / data.activity.stepsGoal * 100)}%`} size={80} />}
                 </div>
                 {data.activity.stepsIntraday.length > 0 && (
                   <div className="home-primary-chart">
@@ -461,7 +511,7 @@ export function TodayView({ data, navigate }: ViewProps) {
                     <PanelHeader title="Sleep" icon={SleepIcon} action={<ChevronRightIcon aria-hidden="true" />} />
                     <div className="sleep-overview-lead">
                       <div className="sleep-overview-duration"><strong>{sleepPrimaryValue}</strong>{(data.sleep.startTime || data.sleep.endTime) && <span>{formatTime(data.sleep.startTime)} – {formatTime(data.sleep.endTime)}</span>}<small>{sleepGoalNote}</small></div>
-                      {(hasValue(data.sleep.score) || hasValue(data.sleep.efficiency)) && <RadialProgress value={data.sleep.score ?? data.sleep.efficiency} color="var(--category-sleep)" label={hasValue(data.sleep.score) ? sleepScoreCategory(data.sleep.score) : 'efficiency'} valueLabel={formatNumber(data.sleep.score ?? data.sleep.efficiency)} size={68} />}
+                      {(hasValue(data.sleep.score) || hasValue(data.sleep.efficiency)) && <RadialProgress value={data.sleep.score ?? data.sleep.efficiency} color="var(--category-sleep)" label={hasValue(data.sleep.score) ? sleepScoreCategory(data.sleep.score) : 'Efficiency'} valueLabel={formatNumber(data.sleep.score ?? data.sleep.efficiency)} size={80} />}
                     </div>
                     {data.sleep.stages.some((stage) => stage.minutes > 0) && <SleepStageBar stages={data.sleep.stages} compact showLegend={false} />}
                   </Panel>
@@ -546,10 +596,12 @@ export function TodayView({ data, navigate }: ViewProps) {
   )
 }
 
-export function ActivityView({ data }: ViewProps) {
-  const stepValues = data.trends.map((point) => point.steps)
-  const validSteps = stepValues.filter(hasValue)
+export function ActivityView({ data, trendWindow, onTrendWindowChange }: ViewProps) {
+  const { options, range, points } = resolveTrendWindow(data, trendWindow)
+  const steps = columnSeries(points, range, (point) => point.steps)
+  const validSteps = points.map((point) => point.steps).filter(hasValue)
   const averageSteps = validSteps.length ? validSteps.reduce((sum, value) => sum + value, 0) / validSteps.length : null
+  const windowControl = <TrendWindowControl value={range} options={options} onChange={onTrendWindowChange} />
   const stepsByHour = hourlyBuckets(data.activity.stepsIntraday)
   const supporting = [
     hasValue(data.activity.floors) ? { label: 'Floors', value: formatNumber(data.activity.floors), icon: FloorsIcon } : null,
@@ -560,12 +612,12 @@ export function ActivityView({ data }: ViewProps) {
     hasValue(data.activity.sedentaryMinutes) ? { label: 'Sedentary time', value: formatNumber(data.activity.sedentaryMinutes), unit: 'min', icon: DurationIcon } : null,
   ].filter((item): item is SupportingMetric => item !== null)
   const activityTrendValues = [
-    data.trends.map((point) => point.calories),
-    data.trends.map((point) => point.distanceKm),
-    data.trends.map((point) => point.activeMinutes),
-    data.trends.map((point) => point.zoneMinutes),
-    data.trends.map((point) => point.sedentaryMinutes),
-    data.trends.map((point) => point.floors),
+    points.map((point) => point.calories),
+    points.map((point) => point.distanceKm),
+    points.map((point) => point.activeMinutes),
+    points.map((point) => point.zoneMinutes),
+    points.map((point) => point.sedentaryMinutes),
+    points.map((point) => point.floors),
   ]
   const hasActivityTrends = activityTrendValues.some((values) => values.filter(hasValue).length > 1)
 
@@ -596,26 +648,33 @@ export function ActivityView({ data }: ViewProps) {
         {validSteps.length > 1 && (
           <Panel className="chart-panel" category="activity">
             <PanelHeader
-              eyebrow={`${validSteps.length} days with data`}
+              eyebrow={steps.weekly ? `${validSteps.length} days · weekly average` : `${validSteps.length} days with data`}
               title="Daily steps"
               icon={TrendIcon}
               action={averageSteps !== null ? <Badge variant="secondary">Average {formatNumber(averageSteps)}</Badge> : null}
             />
-            <ColumnChart values={stepValues} labels={trendLabels(data)} xValues={trendXValues(data)} target={data.activity.stepsGoal} height={226} ariaLabel="Total steps per day" />
+            <ColumnChart
+              values={steps.values}
+              labels={steps.labels}
+              xValues={steps.xValues}
+              target={data.activity.stepsGoal}
+              height={226}
+              ariaLabel={steps.weekly ? 'Average steps per day, one bar per week' : 'Total steps per day'}
+            />
           </Panel>
         )}
       </div>
 
       {hasActivityTrends && (
         <section>
-          <SectionTitle title="Activity trends" copy="Daily series returned by Google Health." />
+          <SectionTitle title="Activity trends" copy="Daily series returned by Google Health." action={windowControl} />
           <div className="metric-trend-grid">
-            <MetricTrendPanel data={data} category="activity" icon={CaloriesIcon} title="Calories burned" values={data.trends.map((point) => point.calories)} formatter={(value) => `${formatNumber(value)} kcal`} />
-            <MetricTrendPanel data={data} category="activity" icon={DistanceIcon} title="Distance" values={data.trends.map((point) => point.distanceKm)} formatter={(value) => `${formatDecimal(value)} km`} />
-            <MetricTrendPanel data={data} category="activity" icon={ActiveIcon} title="Active minutes" values={data.trends.map((point) => point.activeMinutes)} formatter={(value) => `${formatNumber(value)} min`} />
-            <MetricTrendPanel data={data} category="activity" icon={GaugeIcon} title="Zone minutes" values={data.trends.map((point) => point.zoneMinutes)} formatter={(value) => `${formatNumber(value)} min`} />
-            <MetricTrendPanel data={data} category="activity" icon={DurationIcon} title="Sedentary time" values={data.trends.map((point) => point.sedentaryMinutes)} formatter={(value) => formatMinutes(value)} />
-            <MetricTrendPanel data={data} category="activity" icon={FloorsIcon} title="Floors" values={data.trends.map((point) => point.floors)} formatter={(value) => formatNumber(value)} />
+            <MetricTrendPanel points={points} category="activity" icon={CaloriesIcon} title="Calories burned" select={(point) => point.calories} formatter={(value) => `${formatNumber(value)} kcal`} />
+            <MetricTrendPanel points={points} category="activity" icon={DistanceIcon} title="Distance" select={(point) => point.distanceKm} formatter={(value) => `${formatDecimal(value)} km`} />
+            <MetricTrendPanel points={points} category="activity" icon={ActiveIcon} title="Active minutes" select={(point) => point.activeMinutes} formatter={(value) => `${formatNumber(value)} min`} />
+            <MetricTrendPanel points={points} category="activity" icon={GaugeIcon} title="Zone minutes" select={(point) => point.zoneMinutes} formatter={(value) => `${formatNumber(value)} min`} />
+            <MetricTrendPanel points={points} category="activity" icon={DurationIcon} title="Sedentary time" select={(point) => point.sedentaryMinutes} formatter={(value) => formatMinutes(value)} />
+            <MetricTrendPanel points={points} category="activity" icon={FloorsIcon} title="Floors" select={(point) => point.floors} formatter={(value) => formatNumber(value)} />
           </div>
         </section>
       )}
@@ -633,10 +692,12 @@ export function ActivityView({ data }: ViewProps) {
   )
 }
 
-export function HealthView({ data }: ViewProps) {
+export function HealthView({ data, trendWindow, onTrendWindowChange }: ViewProps) {
+  const { options, range, points } = resolveTrendWindow(data, trendWindow)
+  const windowControl = <TrendWindowControl value={range} options={options} onChange={onTrendWindowChange} />
   const heartValues = data.health.heartRateIntraday.map((point) => point.value)
   const heartLabels = data.health.heartRateIntraday.map((point) => point.time)
-  const restingValues = data.trends.map((point) => point.restingHeartRate)
+  const restingValues = points.map((point) => point.restingHeartRate)
   const restingCount = restingValues.filter(hasValue).length
   const signals = overnightSignals(data)
   const secondary = presentSignals([
@@ -648,12 +709,12 @@ export function HealthView({ data }: ViewProps) {
   ])
   const hasHeartSummary = heartValues.length > 0 || hasValue(data.health.currentHeartRate) || hasValue(data.health.restingHeartRate)
   const physiologyTrendValues = [
-    data.trends.map((point) => point.hrvMs),
-    data.trends.map((point) => point.spo2),
-    data.trends.map((point) => point.breathingRate),
-    data.trends.map((point) => point.skinTemperature),
-    data.trends.map((point) => point.coreTemperature),
-    data.trends.map((point) => point.cardioScore),
+    points.map((point) => point.hrvMs),
+    points.map((point) => point.spo2),
+    points.map((point) => point.breathingRate),
+    points.map((point) => point.skinTemperature),
+    points.map((point) => point.coreTemperature),
+    points.map((point) => point.cardioScore),
   ]
   const hasPhysiologyTrends = physiologyTrendValues.some((values) => values.filter(hasValue).length > 1)
 
@@ -687,7 +748,7 @@ export function HealthView({ data }: ViewProps) {
         {signals.length > 0 && (
           <section>
             <SectionTitle title="Nightly metrics" copy="Latest available measurements, without diagnostic thresholds." />
-            <Panel className="signal-panel" category="heart">
+            <Panel className="signal-panel" category="recovery">
               {signals.map((signal, index) => <div key={signal.label}>{index > 0 && <Separator />}<SignalRow signal={signal} /></div>)}
             </Panel>
           </section>
@@ -695,9 +756,9 @@ export function HealthView({ data }: ViewProps) {
 
         {restingCount > 1 && (
           <section>
-            <SectionTitle title="Resting heart rate" copy={`${restingCount} days with data`} />
+            <SectionTitle title="Resting heart rate" copy={`${restingCount} days with data`} action={windowControl} />
             <Panel className="chart-panel compact-chart-panel" category="heart">
-              <LineChart values={restingValues} labels={trendLabels(data)} xValues={trendXValues(data)} color="var(--category-heart)" height={226} formatter={(value) => `${Math.round(value)} bpm`} ariaLabel="Resting heart rate trend" />
+              <LineChart values={restingValues} labels={pointLabels(points)} xValues={pointXValues(points)} color="var(--category-heart)" height={226} formatter={(value) => `${Math.round(value)} bpm`} ariaLabel="Resting heart rate trend" />
             </Panel>
           </section>
         )}
@@ -705,14 +766,14 @@ export function HealthView({ data }: ViewProps) {
 
       {hasPhysiologyTrends && (
         <section>
-          <SectionTitle title="Physiological trends" copy="Compare measurements with your personal trends, not generic thresholds." />
+          <SectionTitle title="Physiological trends" copy="Compare measurements with your personal trends, not generic thresholds." action={restingCount > 1 ? undefined : windowControl} />
           <div className="metric-trend-grid">
-            <MetricTrendPanel data={data} category="heart" icon={SignalIcon} title="HRV" values={data.trends.map((point) => point.hrvMs)} formatter={(value) => `${formatDecimal(value)} ms`} />
-            <MetricTrendPanel data={data} category="heart" icon={CloudIcon} title="Average SpO₂" values={data.trends.map((point) => point.spo2)} formatter={(value) => `${formatDecimal(value)}%`} />
-            <MetricTrendPanel data={data} category="heart" icon={BreathingIcon} title="Breathing rate" values={data.trends.map((point) => point.breathingRate)} formatter={(value) => `${formatDecimal(value)} rpm`} />
-            <MetricTrendPanel data={data} category="recovery" icon={GaugeIcon} title="Skin temperature" values={data.trends.map((point) => point.skinTemperature)} formatter={(value) => `${signedNumber(value, 1)} °C`} />
-            <MetricTrendPanel data={data} category="recovery" icon={GaugeIcon} title="Body temperature" values={data.trends.map((point) => point.coreTemperature)} formatter={(value) => `${formatDecimal(value)} °C`} />
-            <MetricTrendPanel data={data} category="heart" icon={GaugeIcon} title="Cardio fitness" values={data.trends.map((point) => point.cardioScore)} formatter={(value) => formatNumber(value)} />
+            <MetricTrendPanel points={points} category="recovery" icon={SignalIcon} title="HRV" select={(point) => point.hrvMs} formatter={(value) => `${formatDecimal(value)} ms`} />
+            <MetricTrendPanel points={points} category="recovery" icon={CloudIcon} title="Average SpO₂" select={(point) => point.spo2} formatter={(value) => `${formatDecimal(value)}%`} />
+            <MetricTrendPanel points={points} category="recovery" icon={BreathingIcon} title="Breathing rate" select={(point) => point.breathingRate} formatter={(value) => `${formatDecimal(value)} rpm`} />
+            <MetricTrendPanel points={points} category="recovery" icon={GaugeIcon} title="Skin temperature" select={(point) => point.skinTemperature} formatter={(value) => `${signedNumber(value, 1)} °C`} />
+            <MetricTrendPanel points={points} category="recovery" icon={GaugeIcon} title="Body temperature" select={(point) => point.coreTemperature} formatter={(value) => `${formatDecimal(value)} °C`} />
+            <MetricTrendPanel points={points} category="heart" icon={GaugeIcon} title="Cardio fitness" select={(point) => point.cardioScore} formatter={(value) => formatNumber(value)} />
           </div>
         </section>
       )}
@@ -732,11 +793,12 @@ export function HealthView({ data }: ViewProps) {
   )
 }
 
-export function SleepView({ data }: ViewProps) {
-  const sleepValues = data.trends.map((point) => point.sleepMinutes)
-  const sleepCount = sleepValues.filter(hasValue).length
-  const efficiencyValues = data.trends.map((point) => point.sleepEfficiency)
-  const efficiencyCount = efficiencyValues.filter(hasValue).length
+export function SleepView({ data, trendWindow, onTrendWindowChange }: ViewProps) {
+  const { options, range, points } = resolveTrendWindow(data, trendWindow)
+  const windowControl = <TrendWindowControl value={range} options={options} onChange={onTrendWindowChange} />
+  const sleep = columnSeries(points, range, (point) => point.sleepMinutes)
+  const sleepCount = points.map((point) => point.sleepMinutes).filter(hasValue).length
+  const efficiencyCount = points.map((point) => point.sleepEfficiency).filter(hasValue).length
   const stageTimeline = data.sleep.stageTimeline ?? []
   const stageTransitions = data.sleep.stageTransitions
   const hasSummary = hasValue(data.sleep.totalMinutes) || hasValue(data.sleep.score)
@@ -744,7 +806,7 @@ export function SleepView({ data }: ViewProps) {
     <div className="page-stack sleep-page">
       {hasSummary && (
         <div className="sleep-layout">
-          <Panel className="sleep-main-card" tone="violet" category="sleep">
+          <Panel className="sleep-main-card" category="sleep">
             <PanelHeader eyebrow="Last night" title="Duration and quality" icon={SleepIcon} />
             <div className="sleep-main-summary">
               <div className="sleep-duration-large">
@@ -773,7 +835,6 @@ export function SleepView({ data }: ViewProps) {
                   max={Math.max(data.sleep.totalMinutes, data.sleep.goalMinutes) * 1.08}
                   label="Duration compared with goal"
                   valueLabel={`${compactMinutes(data.sleep.totalMinutes)} / ${compactMinutes(data.sleep.goalMinutes)}`}
-                  color="var(--color-cyan)"
                 />
               )}
             </div>
@@ -809,15 +870,24 @@ export function SleepView({ data }: ViewProps) {
 
       {(sleepCount > 1 || efficiencyCount > 1) && (
         <section>
-          <SectionTitle title="Sleep trends" copy="Duration and efficiency of recorded nights." />
+          <SectionTitle title="Sleep trends" copy="Duration and efficiency of recorded nights." action={windowControl} />
           <div className="chart-grid sleep-history-grid">
             {sleepCount > 1 && (
               <Panel className="chart-panel sleep-trend-panel" category="sleep">
-                <PanelHeader eyebrow={`${sleepCount} nights with data`} title="Duration per night" icon={SleepIcon} />
-                <ColumnChart values={sleepValues} labels={trendLabels(data)} xValues={trendXValues(data)} target={data.sleep.goalMinutes} color="var(--category-sleep)" height={196} formatter={(value) => compactMinutes(value)} ariaLabel="Minutes of sleep per night" />
+                <PanelHeader eyebrow={sleep.weekly ? `${sleepCount} nights · weekly average` : `${sleepCount} nights with data`} title="Duration per night" icon={SleepIcon} />
+                <ColumnChart
+                  values={sleep.values}
+                  labels={sleep.labels}
+                  xValues={sleep.xValues}
+                  target={data.sleep.goalMinutes}
+                  color="var(--category-sleep)"
+                  height={196}
+                  formatter={(value) => compactMinutes(value)}
+                  ariaLabel={sleep.weekly ? 'Average sleep per night, one bar per week' : 'Minutes of sleep per night'}
+                />
               </Panel>
             )}
-            <MetricTrendPanel data={data} category="sleep" icon={GaugeIcon} title="Efficiency" values={efficiencyValues} formatter={(value) => `${formatNumber(value)}%`} target={90} />
+            <MetricTrendPanel points={points} category="sleep" icon={GaugeIcon} title="Efficiency" select={(point) => point.sleepEfficiency} formatter={(value) => `${formatNumber(value)}%`} target={90} />
           </div>
         </section>
       )}
@@ -836,15 +906,17 @@ function BodyMetric({ label, value, unit, icon: Icon, note }: { label: string; v
   )
 }
 
-export function BodyView({ data }: ViewProps) {
-  const weightValues = data.trends.map((point) => point.weight)
+export function BodyView({ data, trendWindow, onTrendWindowChange }: ViewProps) {
+  const { options, range, points } = resolveTrendWindow(data, trendWindow)
+  const windowControl = <TrendWindowControl value={range} options={options} onChange={onTrendWindowChange} />
+  const weightValues = points.map((point) => point.weight)
   const weightCount = weightValues.filter(hasValue).length
   const hasComposition = hasValue(data.body.bmi) || hasValue(data.body.bodyFat)
   const hasDaily = hasValue(data.body.waterMl) || hasValue(data.body.caloriesIn)
   const bodyTrendValues = [
-    data.trends.map((point) => point.bodyFat),
-    data.trends.map((point) => point.waterMl),
-    data.trends.map((point) => point.caloriesIn),
+    points.map((point) => point.bodyFat),
+    points.map((point) => point.waterMl),
+    points.map((point) => point.caloriesIn),
   ]
   const hasBodyTrends = bodyTrendValues.some((values) => values.filter(hasValue).length > 1)
   return (
@@ -852,7 +924,7 @@ export function BodyView({ data }: ViewProps) {
       <div className="body-layout">
         {hasValue(data.body.weightKg) && (
           <Panel className="weight-card" category="body">
-            <PanelHeader eyebrow={`${weightCount} measurements`} title="Weight" icon={BodyIcon} />
+            <PanelHeader eyebrow={`${weightCount} measurements`} title="Weight" icon={BodyIcon} action={hasBodyTrends ? undefined : windowControl} />
             <div className="body-weight-value"><strong>{formatDecimal(data.body.weightKg)}</strong><span>kg</span></div>
             {hasValue(data.body.weightGoalKg) && (
               <div className="weight-goal-copy">
@@ -861,7 +933,7 @@ export function BodyView({ data }: ViewProps) {
               </div>
             )}
             {weightCount > 1 && (
-              <LineChart values={weightValues} labels={trendLabels(data)} xValues={trendXValues(data)} target={data.body.weightGoalKg} targetLabel="Goal" height={238} formatter={(value) => `${formatDecimal(value)} kg`} ariaLabel="Weight trend" />
+              <LineChart values={weightValues} labels={pointLabels(points)} xValues={pointXValues(points)} target={data.body.weightGoalKg} targetLabel="Goal" height={238} formatter={(value) => `${formatDecimal(value)} kg`} ariaLabel="Weight trend" />
             )}
           </Panel>
         )}
@@ -887,7 +959,6 @@ export function BodyView({ data }: ViewProps) {
                     max={Math.max(data.body.waterMl, data.body.waterGoalMl ?? 0) * 1.08}
                     label="Water"
                     valueLabel={`${formatNumber(data.body.waterMl)} ml${data.body.waterGoalMl ? ` / ${formatNumber(data.body.waterGoalMl)} ml` : ''}`}
-                    color="var(--color-cyan)"
                   />
                 )}
                 {hasValue(data.body.caloriesIn) && <BodyMetric label="Calories consumed" value={formatNumber(data.body.caloriesIn)} unit="kcal" icon={CaloriesIcon} note="Recorded total" />}
@@ -898,17 +969,28 @@ export function BodyView({ data }: ViewProps) {
       </div>
       {hasBodyTrends && (
         <section>
-          <SectionTitle title="Body and log trends" copy="Only measurements recorded during the synced period." />
+          <SectionTitle title="Body and log trends" copy="Only measurements recorded during the selected period." action={windowControl} />
           <div className="metric-trend-grid">
-            <MetricTrendPanel data={data} category="body" icon={SignalIcon} title="Body fat" values={data.trends.map((point) => point.bodyFat)} formatter={(value) => `${formatDecimal(value)}%`} />
-            <MetricTrendPanel data={data} category="body" icon={WaterIcon} title="Hydration" values={data.trends.map((point) => point.waterMl)} formatter={(value) => `${formatNumber(value)} ml`} />
-            <MetricTrendPanel data={data} category="body" icon={CaloriesIcon} title="Calories consumed" values={data.trends.map((point) => point.caloriesIn)} formatter={(value) => `${formatNumber(value)} kcal`} />
+            <MetricTrendPanel points={points} category="body" icon={SignalIcon} title="Body fat" select={(point) => point.bodyFat} formatter={(value) => `${formatDecimal(value)}%`} />
+            <MetricTrendPanel points={points} category="body" icon={WaterIcon} title="Hydration" select={(point) => point.waterMl} formatter={(value) => `${formatNumber(value)} ml`} />
+            <MetricTrendPanel points={points} category="body" icon={CaloriesIcon} title="Calories consumed" select={(point) => point.caloriesIn} formatter={(value) => `${formatNumber(value)} kcal`} />
           </div>
         </section>
       )}
       {!hasBodyData(data) && <EmptyValue>No body measurements available for this account.</EmptyValue>}
     </div>
   )
+}
+
+// Fitbit reports device types in capitals; show them as a phrase.
+function readableDeviceType(type: string | null | undefined) {
+  if (!type) return null
+  return type === type.toUpperCase() ? type.charAt(0) + type.slice(1).toLowerCase() : type
+}
+
+// Lowercase list items but keep acronyms such as HRV intact.
+function listLabel(label: string) {
+  return label === label.toUpperCase() ? label : label.toLowerCase()
 }
 
 function CoverageRow({ icon: Icon, label, items }: { icon: AppIcon; label: string; items: string[] }) {
@@ -921,7 +1003,83 @@ function CoverageRow({ icon: Icon, label, items }: { icon: AppIcon; label: strin
   )
 }
 
-export function DevicesView({ data, status }: ViewProps) {
+const historyRanges: Array<{ days: HistoryWindowDays; label: string }> = [
+  { days: 30, label: 'Last 30 days' },
+  { days: 90, label: 'Last 90 days' },
+  { days: 365, label: 'Last year' },
+]
+
+function longDate(value: string) {
+  return formatDate(value, { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+function HistoryPanel({ status, backfill }: { status: FitbitAuthStatus; backfill: BackfillPanelState }) {
+  const { coverage, lastRun, progress, running } = backfill
+  const blocker = !status.isElectron
+    ? 'Launch OpenFit in the Electron app to load history.'
+    : !status.connected
+    ? 'Connect Google Health to load history.'
+    : status.provider !== 'google-health'
+    ? 'Long-term history needs Google Health.'
+    : null
+  const percent = progress && progress.total > 0 ? Math.round(progress.completed / progress.total * 100) : null
+  const requested = historyRanges.find((item) => item.days === backfill.requestedDays)
+  const progressCopy = [
+    requested ? `Loading the ${requested.label.toLowerCase()}` : 'Loading history',
+    progress?.total ? `${progress.completed} of ${progress.total} requests` : 'starting',
+    progress ? `${formatDate(progress.start, { day: 'numeric', month: 'short' })} to ${formatDate(progress.end, { day: 'numeric', month: 'short' })}` : null,
+  ].filter(Boolean).join(' · ')
+  const lastRunCopy = lastRun
+    ? [
+        `Last run ${relativeTime(lastRun.finishedAt)}`,
+        lastRun.cancelled ? 'stopped early' : null,
+        lastRun.errors.length ? `${lastRun.errors.length} requests failed` : null,
+      ].filter(Boolean).join(' · ')
+    : null
+
+  return (
+    <Panel className="history-card" category="device">
+      <PanelHeader
+        eyebrow="Long-term history"
+        title="Daily summaries"
+        icon={TrendIcon}
+        action={coverage ? <Badge variant="secondary">{formatNumber(coverage.dayCount)} days</Badge> : null}
+      />
+      <p className="history-copy">
+        {coverage
+          ? `${longDate(coverage.start)} to ${longDate(coverage.end)}${coverage.generatedAt ? ` · updated ${relativeTime(coverage.generatedAt)}` : ''}`
+          : 'No long-term history yet. Load up to a year of daily summaries from Google Health.'}
+      </p>
+      {running && (
+        <div className="history-progress-row" role="status" aria-live="polite">
+          <span>{progressCopy}</span>
+          <div
+            className={`history-progress ${percent === null ? 'is-indeterminate' : ''}`}
+            role="progressbar"
+            aria-label="History download progress"
+            aria-valuemin={0}
+            aria-valuemax={progress?.total || 100}
+            aria-valuenow={progress?.total ? progress.completed : undefined}
+          >
+            <i style={{ width: percent === null ? '32%' : `${percent}%` }} />
+          </div>
+        </div>
+      )}
+      <div className="history-actions">
+        {running
+          ? <Button variant="outline" size="sm" onClick={backfill.onCancel}>Stop</Button>
+          : historyRanges.map((item) => (
+              <Button key={item.days} variant="outline" size="sm" disabled={blocker !== null} onClick={() => backfill.onStart(item.days)}>
+                {item.label}
+              </Button>
+            ))}
+      </div>
+      {(blocker || lastRunCopy) && <p className="history-note">{blocker ?? lastRunCopy}</p>}
+    </Panel>
+  )
+}
+
+export function DevicesView({ data, status, backfill }: ViewProps) {
   const movement = [
     hasValue(data.activity.steps) && 'steps',
     data.activity.stepsIntraday.length > 0 && 'steps per hour',
@@ -935,7 +1093,7 @@ export function DevicesView({ data, status }: ViewProps) {
     data.health.ecgClassification && 'ECG',
   ].filter((item): item is string => Boolean(item))
   const sleep = [hasSleepData(data) && 'duration and stages', hasValue(data.sleep.score) && 'score'].filter((item): item is string => Boolean(item))
-  const nightly = overnightSignals(data).map((signal) => signal.label.toLowerCase())
+  const nightly = overnightSignals(data).map((signal) => listLabel(signal.label))
   const body = [
     hasValue(data.body.weightKg) && 'weight',
     hasValue(data.body.bodyFat) && 'body fat',
@@ -958,7 +1116,7 @@ export function DevicesView({ data, status }: ViewProps) {
             <div className="device-copy">
               <Badge variant="secondary" className={`connection-badge ${isConnected ? 'is-connected' : ''}`}><span className={`status-dot ${isConnected ? 'online' : ''}`} /> {isConnected ? 'Connected' : 'Not connected'}</Badge>
               <h2>{deviceName}</h2>
-              <p>{data.device?.type ?? sourceName}{data.device?.firmware && !isDemo ? ` · firmware ${data.device.firmware}` : ''}</p>
+              <p>{readableDeviceType(data.device?.type) ?? sourceName}{data.device?.firmware && !isDemo ? ` · firmware ${data.device.firmware}` : ''}</p>
               <div className="device-facts">
                 {hasValue(data.device?.batteryLevel ?? null) && <span><BatteryIcon /> {formatNumber(data.device?.batteryLevel ?? null)}%</span>}
                 {data.device?.lastSyncTime && <span><CloudIcon /> Updated {relativeTime(data.device.lastSyncTime)}</span>}
@@ -984,7 +1142,6 @@ export function DevicesView({ data, status }: ViewProps) {
             max={Math.max(data.sync.endpointCount, 1)}
             label="Available sources"
             valueLabel={`${data.sync.successCount} / ${data.sync.endpointCount}`}
-            color="var(--color-emerald)"
           />
           <div className="coverage-list">
             <CoverageRow icon={ActivityIcon} label="Movement" items={movement} />
@@ -1001,6 +1158,9 @@ export function DevicesView({ data, status }: ViewProps) {
       </div>
 
       {data.sync.errors.length > 0 && <div className="sync-note"><InfoIcon aria-hidden="true" /><p>{data.sync.errors.length} sources returned no data for the selected period. Available measurements remain visible.</p></div>}
+
+      <HistoryPanel status={status} backfill={backfill} />
+      <div className="sync-note"><InfoIcon aria-hidden="true" /><p>History holds daily summaries only. Hourly detail and sleep stages load when you open a day.</p></div>
     </div>
   )
 }

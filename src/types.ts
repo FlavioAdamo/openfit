@@ -168,6 +168,9 @@ export interface DashboardData {
     caloriesIn: number | null
   }
   trends: TrendPoint[]
+  // Every merged day up to and including the selected date, oldest first.
+  history: TrendPoint[]
+  historyUpdatedAt: string | null
   activities: ActivityItem[]
   insights: Array<{
     id: string
@@ -202,10 +205,58 @@ export interface RawFitbitPayload {
   }
 }
 
+// One day of provider-independent daily summaries stored in the history archive.
+export type HistoryDay = Omit<TrendPoint, 'date' | 'label'>
+
+export interface HistoryRunError {
+  key: string
+  chunkStart: string
+  message: string
+  status?: number
+}
+
+export interface HistoryRun {
+  requested: { start: string; end: string }
+  startedAt: string
+  finishedAt: string
+  cancelled: boolean
+  errors: HistoryRunError[]
+}
+
+export interface HealthHistory {
+  source: 'google-health' | 'fitbit'
+  generatedAt: string | null
+  days: Record<string, HistoryDay>
+  lastRun: HistoryRun | null
+}
+
+export interface HistoryCoverage {
+  start: string
+  end: string
+  dayCount: number
+  generatedAt: string | null
+}
+
+export type HistoryWindowDays = 30 | 90 | 365
+
+export interface BackfillProgress {
+  completed: number
+  total: number
+  start: string
+  end: string
+}
+
+export interface BackfillResult {
+  cancelled: boolean
+  coverage: HistoryCoverage | null
+  errorCount: number
+}
+
 export interface RawHealthArchive {
   version: number
   lastDate: string | null
   days: Record<string, RawFitbitPayload>
+  history: HealthHistory | null
 }
 
 export interface FitbitAuthStatus {
@@ -235,10 +286,14 @@ export interface FitbitBridge {
   sync: (date: string) => Promise<RawFitbitPayload>
   getCachedData: () => Promise<RawFitbitPayload | null>
   getCachedArchive: () => Promise<RawHealthArchive>
+  getHistory: () => Promise<HealthHistory | null>
+  backfillHistory: (input: { days: HistoryWindowDays }) => Promise<BackfillResult>
+  cancelBackfill: () => Promise<void>
   exportData: () => Promise<{ canceled: boolean; path?: string }>
   openExternal: (url: string) => Promise<void>
   onAuthComplete: (callback: (result: { ok: boolean; error?: string }) => void) => () => void
   onSyncProgress: (callback: (progress: { completed: number; total: number; key: string; date?: string }) => void) => () => void
+  onBackfillProgress: (callback: (progress: BackfillProgress) => void) => () => void
 }
 
 export interface HealthAssistantStatus {
