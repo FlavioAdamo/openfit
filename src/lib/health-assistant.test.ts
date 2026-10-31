@@ -13,7 +13,8 @@ describe('health assistant context', () => {
     const context = JSON.parse(buildHealthAssistantContext(data, [data], 'sleep'))
 
     expect(context.app).toMatchObject({ currentPage: 'sleep', selectedDate: '2026-06-23' })
-    expect(context.archive.dayCount).toBeGreaterThanOrEqual(14)
+    expect(context.archive.dayCount).toBe(data.history.length)
+    expect(context.archive.firstDate).toBe(data.history[0]?.date)
     expect(context.selectedDayDetail.summary).toHaveProperty('activity')
     expect(context.selectedDayDetail.summary).toHaveProperty('health')
     expect(context.selectedDayDetail.summary).toHaveProperty('sleep')

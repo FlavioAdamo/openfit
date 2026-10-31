@@ -135,6 +135,12 @@ Do not commit or share these credentials. During authorization, OpenFit starts a
 
 The connection is working when OpenFit shows **Google Health** instead of **Demo mode**, displays a last synchronization time, and begins showing real device and health metrics. Metric availability depends on the device, region, granted consent, and recent Fitbit mobile synchronization.
 
+### Long-term history
+
+Each sync loads one day together with its 14-day trends. For longer trends, open **Data** and choose **Last 30 days**, **Last 90 days**, or **Last year**. OpenFit reads daily summaries from Google Health in 30-day chunks, newest first, and stores them in the encrypted archive. The trend sections on Activity, Health, Sleep, and Body then offer 14-day, 30-day, 90-day, and 1-year windows. Column charts switch to weekly averages above 60 days.
+
+History holds daily summaries only. Hourly steps, heart rate samples, and sleep stages still load when you open a day. A full year takes about 250 requests and about a minute at the provider's rate limit. You can stop a run and keep what was fetched so far. The legacy Fitbit adapter does not provide history.
+
 ### Security note
 
 The Client Secret, OAuth tokens, and health cache stay in Electron's main process and are encrypted with `safeStorage` using Keychain on macOS, Credential Manager on Windows, or an available secret store on Linux. They are not exposed to the renderer or written to the repository.

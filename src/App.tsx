@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { ChevronsUpDown, LoaderCircle, RefreshCw, Sparkles } from 'lucide-react'
+import { LoaderCircle, RefreshCw, Sparkles } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import {
@@ -30,12 +30,23 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import type { DashboardData, FitbitAuthStatus, FitbitConfigInput, HealthProvider, PageId } from '@/types'
+import type {
+  BackfillProgress,
+  DashboardData,
+  FitbitAuthStatus,
+  FitbitConfigInput,
+  HealthHistory,
+  HealthProvider,
+  HistoryWindowDays,
+  PageId,
+  RawFitbitPayload,
+} from '@/types'
 import { createDemoData, localIso } from '@/data/demo'
-import { normalizeFitbitData } from '@/data/normalize'
-import { formatDate, relativeTime } from '@/lib/format'
+import { historyCoverage, normalizeFitbitData } from '@/data/normalize'
+import { formatDate, formatNumber, relativeTime } from '@/lib/format'
+import type { TrendWindow } from '@/lib/trend-window'
 import { cn } from '@/lib/utils'
-import { ActivityView, BodyView, DevicesView, HealthView, SleepView, TodayView } from '@/components/Views'
+import { ActivityView, BodyView, DevicesView, HealthView, SleepView, TodayView, type BackfillPanelState } from '@/components/Views'
 import { HealthAssistant } from '@/components/HealthAssistant'
 import type { AssistantNavigation } from '@/lib/health-assistant'
 import type { AppIcon } from '@/components/icons'
@@ -60,6 +71,7 @@ import {
   SparkleIcon,
   StepsIcon,
   TodayIcon,
+  UserIcon,
 } from '@/components/icons'
 
 type NavCategory = 'summary' | 'activity' | 'heart' | 'sleep' | 'body' | 'device'
@@ -97,6 +109,14 @@ interface SyncProgressState {
   date?: string
 }
 
+interface BackfillState {
+  running: boolean
+  requestedDays: HistoryWindowDays | null
+  progress: BackfillProgress | null
+}
+
+const idleBackfill: BackfillState = { running: false, requestedDays: null, progress: null }
+
 function shiftDate(value: string, days: number) {
   const [year, month, day] = value.split('-').map(Number)
   return localIso(new Date(year, month - 1, day + days, 12))
@@ -123,11 +143,19 @@ export default function App() {
   const [connecting, setConnecting] = useState(false)
   const [syncProgress, setSyncProgress] = useState<SyncProgressState | null>(null)
   const [toast, setToast] = useState<ToastState | null>(null)
+  const [trendWindow, setTrendWindow] = useState<TrendWindow>(14)
+  const [history, setHistory] = useState<HealthHistory | null>(null)
+  const [backfill, setBackfill] = useState<BackfillState>(idleBackfill)
+  const [importingTakeout, setImportingTakeout] = useState(false)
   const selectedDateRef = useRef(selectedDate)
   const dataDateRef = useRef(data.selectedDate)
   const syncingRef = useRef(false)
   const syncTargetDateRef = useRef<string | null>(null)
   const queuedDateRef = useRef<string | null>(null)
+  // The long-term history and the raw payload behind the current view, so a
+  // finished backfill can re-normalize the shown day without another sync.
+  const historyRef = useRef<HealthHistory | null>(null)
+  const payloadRef = useRef<RawFitbitPayload | null>(null)
 
   useLayoutEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
@@ -144,10 +172,17 @@ export default function App() {
   const loadNativeState = useCallback(async () => {
     if (!window.fitbit) return
     try {
-      const [nextStatus, cached] = await Promise.all([window.fitbit.getStatus(), window.fitbit.getCachedData()])
+      const [nextStatus, cached, archiveHistory] = await Promise.all([
+        window.fitbit.getStatus(),
+        window.fitbit.getCachedData(),
+        window.fitbit.getHistory(),
+      ])
       setStatus(nextStatus)
+      historyRef.current = archiveHistory
+      setHistory(archiveHistory)
       if (cached) {
-        const normalized = normalizeFitbitData(cached)
+        const normalized = normalizeFitbitData(cached, archiveHistory)
+        payloadRef.current = cached
         dataDateRef.current = normalized.selectedDate
         selectedDateRef.current = normalized.selectedDate
         setData({ ...normalized, source: 'cache' })
@@ -184,9 +219,10 @@ export default function App() {
 
         try {
           const payload = await window.fitbit.sync(date)
-          const normalized = normalizeFitbitData(payload)
+          const normalized = normalizeFitbitData(payload, historyRef.current)
 
           if (selectedDateRef.current === date) {
+            payloadRef.current = payload
             dataDateRef.current = normalized.selectedDate
             setData(normalized)
             setToast({
@@ -248,11 +284,72 @@ export default function App() {
         setSyncProgress(progress)
       }
     })
+    const unsubscribeBackfill = window.fitbit.onBackfillProgress((progress) => {
+      setBackfill((current) => current.running ? { ...current, progress } : current)
+    })
     return () => {
       unsubscribeAuth()
       unsubscribeSync()
+      unsubscribeBackfill()
     }
   }, [loadNativeState, runSync])
+
+  // Reads the archive's history again and re-normalizes the shown day with it.
+  const reloadHistory = useCallback(async () => {
+    if (!window.fitbit) return
+    const nextHistory = await window.fitbit.getHistory()
+    historyRef.current = nextHistory
+    setHistory(nextHistory)
+    const payload = payloadRef.current
+    if (payload && payload.date === dataDateRef.current) {
+      setData((current) => ({ ...normalizeFitbitData(payload, nextHistory), source: current.source }))
+    }
+  }, [])
+
+  const startBackfill = useCallback(async (days: HistoryWindowDays) => {
+    if (!window.fitbit) return
+    setBackfill({ running: true, requestedDays: days, progress: null })
+    try {
+      const result = await window.fitbit.backfillHistory({ days })
+      await reloadHistory()
+      const coverage = result.coverage
+      const span = coverage ? `${formatNumber(coverage.dayCount)} days of history` : 'No history'
+      setToast({
+        tone: result.cancelled || result.errorCount ? 'neutral' : 'success',
+        message: result.cancelled
+          ? `Stopped early. ${span} kept.`
+          : result.errorCount
+          ? `${span} loaded. ${result.errorCount} requests failed.`
+          : `${span} loaded.`,
+      })
+    } catch (error) {
+      setToast({ tone: 'error', message: error instanceof Error ? error.message : 'History download failed.' })
+    } finally {
+      setBackfill(idleBackfill)
+    }
+  }, [reloadHistory])
+
+  const importTakeout = useCallback(async () => {
+    if (!window.fitbit) return
+    setImportingTakeout(true)
+    try {
+      const result = await window.fitbit.importTakeout()
+      if (result.canceled) return
+      await reloadHistory()
+      const skipped = result.skippedFiles
+        ? ` ${formatNumber(result.skippedFiles)} other ${result.skippedFiles === 1 ? 'file' : 'files'} skipped.`
+        : ''
+      setToast({ tone: 'success', message: `${formatNumber(result.dayCount)} days imported from Takeout.${skipped}` })
+    } catch (error) {
+      setToast({ tone: 'error', message: error instanceof Error ? error.message : 'Takeout import failed.' })
+    } finally {
+      setImportingTakeout(false)
+    }
+  }, [reloadHistory])
+
+  const cancelBackfill = useCallback(() => {
+    void window.fitbit?.cancelBackfill()
+  }, [])
 
   useEffect(() => {
     if (!toast) return
@@ -314,6 +411,9 @@ export default function App() {
   const disconnect = async () => {
     if (!window.fitbit) return
     setStatus(await window.fitbit.disconnect())
+    historyRef.current = null
+    payloadRef.current = null
+    setHistory(null)
     setData(createDemoData(selectedDate))
     setSettingsOpen(false)
     setPage('today')
@@ -329,15 +429,35 @@ export default function App() {
     if (!result.canceled) setToast({ tone: 'success', message: 'JSON archive exported.' })
   }
 
+  // Demo data carries its own sample history until the archive holds real
+  // days, which a Takeout import can add before any account is connected.
+  const backfillPanel = useMemo<BackfillPanelState>(() => {
+    const archiveDates = Object.keys(history?.days ?? {})
+    const showDemoHistory = data.source === 'demo' && !archiveDates.length
+    return {
+      running: backfill.running,
+      requestedDays: backfill.requestedDays,
+      progress: backfill.progress,
+      coverage: showDemoHistory
+        ? historyCoverage(data.history.map((point) => point.date), data.historyUpdatedAt)
+        : historyCoverage(archiveDates, history?.generatedAt ?? null),
+      lastRun: showDemoHistory ? null : history?.lastRun ?? null,
+      onStart: (days) => void startBackfill(days),
+      onCancel: cancelBackfill,
+      importing: importingTakeout,
+      onImport: () => void importTakeout(),
+    }
+  }, [backfill, cancelBackfill, data.history, data.historyUpdatedAt, data.source, history, importTakeout, importingTakeout, startBackfill])
+
   const currentView = useMemo(() => {
-    const props = { data, status, navigate: setPage }
+    const props = { data, status, navigate: setPage, trendWindow, onTrendWindowChange: setTrendWindow, backfill: backfillPanel }
     if (page === 'activity') return <ActivityView {...props} />
     if (page === 'health') return <HealthView {...props} />
     if (page === 'sleep') return <SleepView {...props} />
     if (page === 'body') return <BodyView {...props} />
     if (page === 'devices') return <DevicesView {...props} />
     return <TodayView {...props} />
-  }, [data, page, status])
+  }, [backfillPanel, data, page, status, trendWindow])
 
   const isToday = selectedDate === localIso()
   const sourceLabel = status.connected
@@ -533,7 +653,7 @@ function OpenFitSidebar({
     .filter(Boolean)
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase())
-    .join('') || 'PB'
+    .join('')
   const wellbeingItems = items.filter((item) => item.id !== 'devices')
   const dataItem = items.find((item) => item.id === 'devices')
 
@@ -548,7 +668,7 @@ function OpenFitSidebar({
   }
 
   return (
-    <Sidebar collapsible="icon" className="pulse-sidebar">
+    <Sidebar collapsible="icon" className="app-sidebar">
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
@@ -620,16 +740,16 @@ function OpenFitSidebar({
       <SidebarFooter>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" className="sidebar-user" tooltip={userName} onClick={openSettings}>
+            <SidebarMenuButton size="lg" className="sidebar-user" tooltip="Settings" aria-label={`Open settings for ${userName}`} onClick={openSettings}>
               <Avatar className="sidebar-user-avatar">
                 {userAvatar && <AvatarImage src={userAvatar} alt="" />}
-                <AvatarFallback>{initials}</AvatarFallback>
+                <AvatarFallback>{initials || <UserIcon aria-hidden="true" />}</AvatarFallback>
               </Avatar>
               <span className="sidebar-user-copy">
                 <strong>{userName}</strong>
                 <small>{sourceLabel}</small>
               </span>
-              <ChevronsUpDown className="sidebar-switcher-icon" />
+              <SettingsIcon className="sidebar-user-action" aria-hidden="true" />
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
@@ -638,6 +758,8 @@ function OpenFitSidebar({
     </Sidebar>
   )
 }
+
+type CredentialField = 'clientId' | 'clientSecret' | 'redirectUri'
 
 function SettingsDialog({
   open,
@@ -663,6 +785,8 @@ function SettingsDialog({
   const [redirectUri, setRedirectUri] = useState(status.redirectUri)
   const [provider, setProvider] = useState<HealthProvider>(status.provider)
   const [editing, setEditing] = useState(!status.configured)
+  const [touched, setTouched] = useState<Partial<Record<CredentialField, boolean>>>({})
+  const [submitted, setSubmitted] = useState(false)
 
   useEffect(() => {
     if (!open) return
@@ -671,18 +795,24 @@ function SettingsDialog({
     setProvider(status.provider)
     setClientSecret('')
     setEditing(!status.configured)
+    setTouched({})
+    setSubmitted(false)
   }, [open, status])
 
   const secretRequired = provider === 'google-health'
   const providerLabel = provider === 'google-health' ? 'Google Health' : 'Fitbit legacy'
   const savedSecretMatchesProvider = status.hasClientSecret && status.provider === provider
-  const canSave = status.storageEncrypted
-    && clientId.trim().length > 2
-    && (!secretRequired || clientSecret.trim().length > 4 || savedSecretMatchesProvider)
-    && redirectUri.startsWith('http://127.0.0.1:')
+  const errors: Partial<Record<CredentialField, string>> = {}
+  if (clientId.trim().length <= 2) errors.clientId = 'Enter the OAuth client ID from the developer console.'
+  if (secretRequired && clientSecret.trim().length <= 4 && !savedSecretMatchesProvider) errors.clientSecret = 'Google Health needs the client secret that goes with this ID.'
+  if (!redirectUri.trim().startsWith('http://127.0.0.1:')) errors.redirectUri = 'Use a loopback address that starts with http://127.0.0.1:'
+  const canSave = status.storageEncrypted && Object.keys(errors).length === 0
+  const errorFor = (field: CredentialField) => (submitted || touched[field] ? errors[field] : undefined)
+  const markTouched = (field: CredentialField) => setTouched((current) => ({ ...current, [field]: true }))
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
+    setSubmitted(true)
     if (!canSave) return
     void onSave({
       provider,
@@ -733,20 +863,60 @@ function SettingsDialog({
               </label>
             </div>
 
+            {!status.storageEncrypted && (
+              <div className="form-notice" role="status">
+                <ShieldIcon aria-hidden="true" />
+                <p>{status.isElectron ? 'Encrypted storage is not available on this system, so credentials cannot be saved.' : 'Credentials can only be saved in the desktop app.'}</p>
+              </div>
+            )}
+
             <div className="form-field">
               <Label htmlFor="client-id">OAuth Client ID</Label>
-              <Input id="client-id" value={clientId} onChange={(event) => setClientId(event.target.value)} autoComplete="off" />
+              <Input
+                id="client-id"
+                className="is-mono"
+                value={clientId}
+                onChange={(event) => setClientId(event.target.value)}
+                onBlur={() => markTouched('clientId')}
+                autoComplete="off"
+                aria-invalid={errorFor('clientId') ? true : undefined}
+                aria-describedby={errorFor('clientId') ? 'client-id-error' : undefined}
+              />
+              {errorFor('clientId') && <p className="form-error" id="client-id-error">{errorFor('clientId')}</p>}
             </div>
             {secretRequired && (
               <div className="form-field">
                 <Label htmlFor="client-secret">Client Secret {savedSecretMatchesProvider && <span>· leave blank to keep the current one</span>}</Label>
-                <Input id="client-secret" type="password" value={clientSecret} onChange={(event) => setClientSecret(event.target.value)} placeholder={savedSecretMatchesProvider ? '••••••••••••' : ''} autoComplete="new-password" />
+                <Input
+                  id="client-secret"
+                  className="is-mono"
+                  type="password"
+                  value={clientSecret}
+                  onChange={(event) => setClientSecret(event.target.value)}
+                  onBlur={() => markTouched('clientSecret')}
+                  placeholder={savedSecretMatchesProvider ? '••••••••••••' : ''}
+                  autoComplete="new-password"
+                  aria-invalid={errorFor('clientSecret') ? true : undefined}
+                  aria-describedby={errorFor('clientSecret') ? 'client-secret-error' : undefined}
+                />
+                {errorFor('clientSecret') && <p className="form-error" id="client-secret-error">{errorFor('clientSecret')}</p>}
               </div>
             )}
             <div className="form-field">
               <Label htmlFor="callback-url">Callback URL</Label>
-              <Input id="callback-url" value={redirectUri} onChange={(event) => setRedirectUri(event.target.value)} spellCheck={false} />
-              <p>It must exactly match the URL configured in Google Cloud.</p>
+              <Input
+                id="callback-url"
+                className="is-mono"
+                value={redirectUri}
+                onChange={(event) => setRedirectUri(event.target.value)}
+                onBlur={() => markTouched('redirectUri')}
+                spellCheck={false}
+                aria-invalid={errorFor('redirectUri') ? true : undefined}
+                aria-describedby={errorFor('redirectUri') ? 'callback-url-error' : 'callback-url-hint'}
+              />
+              {errorFor('redirectUri')
+                ? <p className="form-error" id="callback-url-error">{errorFor('redirectUri')}</p>
+                : <p className="form-hint" id="callback-url-hint">It must match the redirect URI registered in the developer console exactly.</p>}
             </div>
 
             <button type="button" className="portal-link" onClick={openDeveloperPortal}>Open developer console <ExternalIcon /></button>
@@ -754,7 +924,7 @@ function SettingsDialog({
 
             <DialogFooter className="settings-footer">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-              <Button type="submit" disabled={!canSave || connecting}>{connecting ? <LoaderIcon className="spin" /> : <CloudIcon />} Save and connect</Button>
+              <Button type="submit" disabled={!status.storageEncrypted || connecting}>{connecting ? <LoaderIcon className="spin" /> : <CloudIcon />} Save and connect</Button>
             </DialogFooter>
           </form>
         )}

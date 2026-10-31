@@ -16,10 +16,13 @@ function seeded(index: number, salt: number) {
   return Math.sin(index * 12.9898 + salt * 78.233) * 0.5 + 0.5
 }
 
-function makeTrends(selectedDate: string): TrendPoint[] {
+// The last 14 points are identical whatever the length, so longer series only
+// extend the demo history backwards.
+function makeTrends(selectedDate: string, length = 14): TrendPoint[] {
   const end = dateFromIso(selectedDate)
   const formatter = new Intl.DateTimeFormat('en-US', { weekday: 'short' })
-  return Array.from({ length: 14 }, (_, index) => {
+  return Array.from({ length }, (_, position) => {
+    const index = position - (length - 14)
     const date = new Date(end.getTime() - (13 - index) * dayMs)
     const activityWave = Math.sin(index * 0.9) * 1_350
     const steps = Math.round(7_200 + activityWave + seeded(index, 2) * 3_100)
@@ -146,7 +149,8 @@ function makeActivities(selectedDate: string): ActivityItem[] {
 }
 
 export function createDemoData(selectedDate = localIso()): DashboardData {
-  const trends = makeTrends(selectedDate)
+  const history = makeTrends(selectedDate, 120)
+  const trends = history.slice(-14)
   const latest = trends.at(-1)!
   const latestSteps = latest.steps ?? 0
   const latestSleepMinutes = latest.sleepMinutes ?? 0
@@ -216,7 +220,7 @@ export function createDemoData(selectedDate = localIso()): DashboardData {
       coreTemperature: null,
       vo2Max: '49–53',
       cardioScore: latest.cardioScore,
-      ecgClassification: 'Ritmo sinusale',
+      ecgClassification: 'Sinus rhythm',
       bloodGlucoseMgDl: null,
       irregularRhythmAlerts: 0,
     },
@@ -245,6 +249,8 @@ export function createDemoData(selectedDate = localIso()): DashboardData {
       caloriesIn: latest.caloriesIn,
     },
     trends,
+    history,
+    historyUpdatedAt: new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
     activities: makeActivities(selectedDate),
     insights: [
       {

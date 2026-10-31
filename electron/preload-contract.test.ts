@@ -50,10 +50,15 @@ describe('preload bridge contract', () => {
       'sync',
       'getCachedData',
       'getCachedArchive',
+      'getHistory',
+      'backfillHistory',
+      'cancelBackfill',
+      'importTakeout',
       'exportData',
       'openExternal',
       'onAuthComplete',
       'onSyncProgress',
+      'onBackfillProgress',
     ]))
 
     expect(fitbit?.getStatus()).toMatchObject({ channel: 'fitbit:get-status' })
@@ -63,6 +68,10 @@ describe('preload bridge contract', () => {
     expect(fitbit?.sync('2026-06-22')).toMatchObject({ channel: 'fitbit:sync', args: ['2026-06-22'] })
     expect(fitbit?.getCachedData()).toMatchObject({ channel: 'fitbit:get-cached-data' })
     expect(fitbit?.getCachedArchive()).toMatchObject({ channel: 'fitbit:get-cached-archive' })
+    expect(fitbit?.getHistory()).toMatchObject({ channel: 'fitbit:get-history' })
+    expect(fitbit?.backfillHistory({ days: 90 })).toMatchObject({ channel: 'fitbit:backfill-history', args: [{ days: 90 }] })
+    expect(fitbit?.cancelBackfill()).toMatchObject({ channel: 'fitbit:cancel-backfill' })
+    expect(fitbit?.importTakeout()).toMatchObject({ channel: 'fitbit:import-takeout' })
     expect(fitbit?.exportData()).toMatchObject({ channel: 'fitbit:export-data' })
     expect(fitbit?.openExternal('https://example.test')).toMatchObject({ channel: 'fitbit:open-external', args: ['https://example.test'] })
 
@@ -83,7 +92,16 @@ describe('preload bridge contract', () => {
     expect(handleSyncProgress).toHaveBeenCalledWith({ completed: 1, total: 2, key: 'steps' })
     unsubscribeSync()
     expect(removeListener).toHaveBeenCalledWith('fitbit:sync-progress', syncListener)
-    expect(invoke).toHaveBeenCalledTimes(9)
+
+    const handleBackfillProgress = vi.fn()
+    const unsubscribeBackfill = fitbit?.onBackfillProgress(handleBackfillProgress) as () => void
+    const backfillListener = on.mock.calls.at(-1)?.[1]
+    expect(on.mock.calls.at(-1)?.[0]).toBe('fitbit:backfill-progress')
+    backfillListener('electron-event', { completed: 3, total: 40, start: '2026-05-24', end: '2026-06-22' })
+    expect(handleBackfillProgress).toHaveBeenCalledWith({ completed: 3, total: 40, start: '2026-05-24', end: '2026-06-22' })
+    unsubscribeBackfill()
+    expect(removeListener).toHaveBeenCalledWith('fitbit:backfill-progress', backfillListener)
+    expect(invoke).toHaveBeenCalledTimes(13)
   })
 
   it('exposes the expected health assistant bridge methods and IPC channels', () => {

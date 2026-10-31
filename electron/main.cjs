@@ -10,6 +10,7 @@ const { fileURLToPath } = require('node:url')
 const googleHealth = require('./google-health-service.cjs')
 const fitbitLegacy = require('./fitbit-legacy-service.cjs')
 const healthCache = require('./health-cache.cjs')
+const takeoutImport = require('./takeout-import.cjs')
 const { createCodexService, resolveCodexBinary } = require('./codex-service.cjs')
 
 app.commandLine.appendSwitch('lang', 'en-US')
@@ -32,8 +33,26 @@ let oauthTimeout = null
 let credentialFile = null
 let cacheFile = null
 let syncInFlight = null
+let backfillInFlight = null
+let backfillAbort = null
+let takeoutImportInFlight = false
+let archiveQueue = Promise.resolve()
 let codexService = null
 let assistantRequestId = null
+
+const HISTORY_WINDOWS = new Set([30, 90, 365])
+
+// Serializes read-modify-write cycles on the encrypted archive so a day sync
+// and a history backfill cannot overwrite each other's changes.
+function updateArchive(mutate) {
+  const run = archiveQueue.then(() => {
+    const next = mutate(healthCache.normalizeArchive(readSecure(cacheFile, null)))
+    writeSecure(cacheFile, next)
+    return next
+  })
+  archiveQueue = run.catch(() => undefined)
+  return run
+}
 
 function atomicWrite(file, content) {
   const temporary = `${file}.${process.pid}.tmp`
@@ -262,10 +281,84 @@ async function syncData(date) {
   if (!total || succeeded < minimumUsefulResponses || !hasMeasurementResponse) {
     throw new Error('The sync did not return enough valid sources. The previous cache was preserved.')
   }
-  writeSecure(cacheFile, healthCache.storeDay(archive, payload))
+  await updateArchive((current) => healthCache.storeDay(current, payload))
   credentials.lastSyncAt = payload.generatedAt
   saveCredentials(credentials)
   return payload
+}
+
+async function backfillHistory(days) {
+  if (!HISTORY_WINDOWS.has(days)) throw new Error('Choose a history window of 30, 90, or 365 days.')
+  if (backfillInFlight) throw new Error('A history sync is already in progress.')
+  const credentials = await validAccessToken(getCredentials())
+  const service = providerFor(credentials)
+  if (typeof service.syncHistory !== 'function') throw new Error('History sync is available with Google Health only.')
+
+  const end = localIsoDate()
+  const start = shiftIsoDate(end, -(days - 1))
+  const startedAt = new Date().toISOString()
+  const controller = new AbortController()
+  backfillAbort = controller
+  backfillInFlight = (async () => {
+    const result = await service.syncHistory(credentials.token.access_token, { start, end }, {
+      signal: controller.signal,
+      onProgress: (progress) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('fitbit:backfill-progress', progress)
+      },
+      onChunk: (chunk) => updateArchive((current) => healthCache.storeHistory(current, {
+        source: service.provider,
+        generatedAt: new Date().toISOString(),
+        days: chunk.days,
+      })),
+    })
+    if (!result.cancelled && result.requestStats.total > 0 && result.requestStats.failed >= result.requestStats.total) {
+      throw new Error('The history sync did not return any data. The archive was preserved.')
+    }
+    const archive = await updateArchive((current) => healthCache.storeHistory(current, {
+      source: service.provider,
+      generatedAt: result.generatedAt,
+      days: {},
+      lastRun: {
+        requested: { start, end },
+        startedAt,
+        finishedAt: result.generatedAt,
+        cancelled: result.cancelled,
+        errors: result.errors,
+      },
+    }))
+    return { cancelled: result.cancelled, coverage: healthCache.historyCoverage(archive), errorCount: result.errors.length }
+  })()
+  try {
+    return await backfillInFlight
+  } finally {
+    backfillInFlight = null
+    backfillAbort = null
+  }
+}
+
+// Reads daily history from an extracted Google Takeout export. Needs no
+// account connection and spends no API quota.
+async function importTakeout() {
+  if (takeoutImportInFlight) throw new Error('A Takeout import is already in progress.')
+  takeoutImportInFlight = true
+  try {
+    const selection = await dialog.showOpenDialog(mainWindow, {
+      title: 'Choose your extracted Google Takeout folder',
+      buttonLabel: 'Import',
+      properties: ['openDirectory'],
+    })
+    if (selection.canceled || !selection.filePaths[0]) return { canceled: true, coverage: null, dayCount: 0, skippedFiles: 0 }
+    const result = await takeoutImport.importTakeoutFolder(selection.filePaths[0])
+    const dayCount = Object.keys(result.days).length
+    if (!dayCount) throw new Error('The Takeout folder has no daily summaries to import.')
+    const archive = await updateArchive((current) => healthCache.storeHistory(current, {
+      generatedAt: new Date().toISOString(),
+      days: result.days,
+    }))
+    return { canceled: false, coverage: healthCache.historyCoverage(archive), dayCount, skippedFiles: result.skippedFiles }
+  } finally {
+    takeoutImportInFlight = false
+  }
 }
 
 function developmentUrl() {
@@ -333,6 +426,11 @@ function validSyncDate(value) {
 
 function localIsoDate(now = new Date()) {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+}
+
+function shiftIsoDate(value, days) {
+  const [year, month, day] = value.split('-').map(Number)
+  return localIsoDate(new Date(year, month - 1, day + days, 12))
 }
 
 function createWindow() {
@@ -418,6 +516,12 @@ function registerIpc() {
       syncInFlight = null
     }
   })
+  trustedHandle('fitbit:backfill-history', (input) => backfillHistory(Number(input?.days)))
+  trustedHandle('fitbit:cancel-backfill', () => {
+    backfillAbort?.abort()
+  })
+  trustedHandle('fitbit:import-takeout', () => importTakeout())
+  trustedHandle('fitbit:get-history', () => healthCache.normalizeArchive(readSecure(cacheFile, null)).history)
   trustedHandle('fitbit:export-data', async () => {
     const cached = healthCache.normalizeArchive(readSecure(cacheFile, null))
     if (!Object.keys(cached.days).length) throw new Error('There is no real data to export yet.')
@@ -523,5 +627,6 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   closeOAuthServer()
+  backfillAbort?.abort()
   void codexService?.dispose()
 })
