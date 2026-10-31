@@ -28,11 +28,6 @@ export function compactMinutes(value: number | null) {
   return `${hours}h ${String(minutes).padStart(2, '0')}m`
 }
 
-export function clampPercent(value: number | null, target: number | null) {
-  if (value === null || target === null || target <= 0) return 0
-  return Math.max(0, Math.min(100, (value / target) * 100))
-}
-
 export function formatTime(value: string | null) {
   if (!value) return '—'
   const date = new Date(value)
@@ -47,7 +42,7 @@ export function formatDate(value: string, options: Intl.DateTimeFormatOptions = 
 }
 
 export function relativeTime(value: string | null) {
-  if (!value) return 'Mai'
+  if (!value) return 'Never'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   const minutes = Math.round((Date.now() - date.getTime()) / 60_000)
@@ -56,10 +51,4 @@ export function relativeTime(value: string | null) {
   const hours = Math.round(minutes / 60)
   if (hours < 24) return `${hours} hr ago`
   return new Intl.DateTimeFormat('en-US', { day: 'numeric', month: 'short' }).format(date)
-}
-
-export function trendDelta(values: Array<number | null>) {
-  const valid = values.filter((value): value is number => value !== null)
-  if (valid.length < 2 || valid[0] === 0) return null
-  return ((valid.at(-1)! - valid[0]) / valid[0]) * 100
 }
