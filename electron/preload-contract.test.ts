@@ -92,6 +92,7 @@ describe('preload bridge contract', () => {
 
     expect(new Set(Object.keys(assistant ?? {}))).toEqual(new Set([
       'getStatus',
+      'setProvider',
       'startTurn',
       'cancel',
       'reset',
@@ -99,6 +100,7 @@ describe('preload bridge contract', () => {
     ]))
 
     expect(assistant?.getStatus()).toMatchObject({ channel: 'assistant:get-status' })
+    expect(assistant?.setProvider('claude')).toMatchObject({ channel: 'assistant:set-provider', args: ['claude'] })
     expect(assistant?.startTurn({ requestId: 'abc12345' })).toMatchObject({
       channel: 'assistant:start-turn',
       args: [{ requestId: 'abc12345' }],
@@ -114,6 +116,6 @@ describe('preload bridge contract', () => {
     expect(handleAssistantEvent).toHaveBeenCalledWith({ requestId: 'abc12345', type: 'delta', delta: 'hi' })
     unsubscribe()
     expect(removeListener).toHaveBeenCalledWith('assistant:event', listener)
-    expect(invoke).toHaveBeenCalledTimes(4)
+    expect(invoke).toHaveBeenCalledTimes(5)
   })
 })

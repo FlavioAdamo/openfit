@@ -35,7 +35,7 @@ Requirements:
 
 - Node.js 22 or later;
 - npm 10 or later;
-- Codex Desktop and a signed-in Codex account, only if you want to use the health assistant. OpenFit reuses the local login and does not require an API key.
+- Codex Desktop or [Claude Code](https://claude.com/claude-code), signed in, only if you want to use the health assistant. OpenFit reuses the local login and does not require an API key.
 
 ```bash
 npm install
@@ -182,6 +182,7 @@ electron/
   main.cjs                    Electron shell, OAuth loopback, IPC, encrypted storage
   preload.cjs                 Minimal typed IPC bridge
   codex-service.cjs           Read-only Codex app-server JSONL client
+  claude-service.cjs          Tool-less headless Claude Code stream-json client
   google-health-service.cjs   Google Health API v4 provider
   fitbit-legacy-service.cjs   Legacy Fitbit Web API provider with PKCE
 src/
@@ -211,11 +212,14 @@ See [Architecture](docs/ARCHITECTURE.md) for security boundaries and design deci
 
 ## Health assistant
 
-The chat button in the top bar opens a right-side panel built with assistant-ui primitives. Its bridge uses `codex app-server`, the same local interface used by Codex clients, with a read-only sandbox, approvals disabled, and tool calls denied by default.
+The chat button in the top bar opens a right-side panel built with assistant-ui primitives. It can use either of two local assistants, selected with the **Codex / Claude** switch in the panel header. The choice is saved; on first launch OpenFit picks the first one installed, preferring Codex. Both reuse the local sign-in, so no API key is stored in OpenFit.
 
-When you send a message, OpenFit creates a compact context containing normalized metrics, available dates, and details for the selected day. It does not include OAuth credentials or encrypted files. This context is sent to Codex/OpenAI only after you use the chat. Codex may navigate to an OpenFit view or date, but it cannot modify health data.
+- **Codex** runs `codex app-server`, the same local interface used by Codex clients, with a read-only sandbox, approvals disabled, and tool calls denied by default.
+- **Claude** runs the Claude Code CLI headless (`claude --print --input-format stream-json --output-format stream-json`) with every tool disabled (`--tools ""`), no MCP servers (`--strict-mcp-config`), no user or project settings, hooks, or `CLAUDE.md` (`--setting-sources ""`), no skills or slash commands, and no transcript written to disk (`--no-session-persistence`). Any permission request from the CLI is refused. OpenFit looks for `claude` on `PATH`, then in `~/.local/bin`, `~/.claude/local`, `/opt/homebrew/bin`, and `/usr/local/bin`; set `CLAUDE_BINARY` to use another executable.
 
-No Codex model name is hard-coded in this repository. The app-server selects its configured default model unless a model is supplied programmatically through the service options.
+When you send a message, OpenFit creates a compact context containing normalized metrics, available dates, and details for the selected day. It does not include OAuth credentials or encrypted files. This context is sent to the selected provider (OpenAI for Codex, Anthropic for Claude) only after you use the chat. The assistant may navigate to an OpenFit view or date, but it cannot modify health data. Switching assistants starts a new conversation.
+
+No model name is hard-coded in this repository. Each CLI uses its configured default model unless a model is supplied programmatically through the service options.
 
 ## Official references
 
