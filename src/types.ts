@@ -241,7 +241,11 @@ export interface FitbitBridge {
   onSyncProgress: (callback: (progress: { completed: number; total: number; key: string; date?: string }) => void) => () => void
 }
 
+export type AssistantProvider = 'codex' | 'claude'
+
 export interface HealthAssistantStatus {
+  provider: AssistantProvider
+  providers: Array<{ id: AssistantProvider; label: string; available: boolean }>
   available: boolean
   connected: boolean
   authenticated: boolean
@@ -257,6 +261,7 @@ export type HealthAssistantEvent =
 
 export interface HealthAssistantBridge {
   getStatus: () => Promise<HealthAssistantStatus>
+  setProvider: (provider: AssistantProvider) => Promise<HealthAssistantStatus>
   startTurn: (input: {
     requestId: string
     message: string

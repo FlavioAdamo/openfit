@@ -1431,6 +1431,29 @@ input:focus-visible,
 
 .assistant-mark svg { width: 16px; height: 16px; stroke-width: 1.7; }
 
+.assistant-provider {
+  display: flex;
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  -webkit-app-region: no-drag;
+}
+
+.assistant-provider label {
+  padding: 4px 9px;
+  border-radius: 6px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.assistant-provider label:hover { color: var(--foreground); }
+.assistant-provider label.active { color: var(--foreground); background: var(--accent); }
+.assistant-provider label:focus-within { outline: 2px solid var(--ring); outline-offset: 1px; }
+
 .assistant-header-actions {
   display: flex;
   flex: 0 0 auto;

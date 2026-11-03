@@ -8,7 +8,7 @@
 - Partial consent and missing sensors must not block the dashboard.
 - Encrypted per-day health archive and no upload to OpenFit services. Completed days are read locally without new provider requests. If `safeStorage` is unavailable, or Linux selects the unencrypted `basic_text` backend, saving fails explicitly.
 - One normalization layer, so views do not depend on remote API shapes.
-- Optional chat through Codex app-server. The project contains no API key, and no health data is sent until the user sends a message.
+- Optional chat through a local assistant: Codex app-server or the Claude Code CLI. The project contains no API key, and no health data is sent until the user sends a message.
 
 ## Flow
 
@@ -27,6 +27,7 @@ flowchart LR
     Renderer -->|Compact health context on request| Preload
     Preload -->|Chat IPC| Main
     Main -->|JSONL stdio, read-only sandbox| Codex["Codex app-server"]
+    Main -->|stream-json stdio, no tools| Claude["Claude Code CLI"]
 ```
 
 ## Security Boundaries
@@ -40,7 +41,7 @@ The main process is the only process allowed to:
 - call `health.googleapis.com` and `api.fitbit.com`;
 - read and write cache and credentials;
 - open external URLs and export files only after explicit user action;
-- start Codex app-server and forward only the compact health context prepared for the turn.
+- start the selected assistant (Codex app-server or Claude Code) and forward only the compact health context prepared for the turn.
 
 ### Preload
 
@@ -48,12 +49,20 @@ The preload exposes an operation allowlist through `contextBridge`. It does not 
 
 ### Renderer
 
-The renderer runs with `nodeIntegration: false`, `contextIsolation: true`, and sandboxing enabled. It receives public status and credential-free health payloads, then normalizes and compacts only the metrics needed before a Codex turn.
+The renderer runs with `nodeIntegration: false`, `contextIsolation: true`, and sandboxing enabled. It receives public status and credential-free health payloads, then normalizes and compacts only the metrics needed before an assistant turn.
 
 ### Codex Bridge
 
 `codex-service.cjs` resolves the Codex Desktop executable, starts `codex app-server` over stdio, and reuses the local authentication. Every thread uses `read-only`, `approvalPolicy: never`, and disabled network access for tools. Shell, patch, permission, input, and tool requests are denied by the client. Fitbit and Google OAuth credentials never enter the model context.
 
+
+### Claude Bridge
+
+`claude-service.cjs` resolves the `claude` executable, starts it headless with stream-json input and output over stdio, and reuses the local authentication. The process runs with no tools, no MCP servers, no settings sources (so no hooks or `CLAUDE.md`), no slash commands or skills, and no session persistence. Any `control_request` from the CLI is refused, and stderr is never surfaced. One process holds the conversation; Cancel sends an interrupt and Reset kills the process. Fitbit and Google OAuth credentials never enter the model context.
+
+### Assistant Selection
+
+Both bridges expose the same `startTurn`, `cancelTurn`, `reset`, `getStatus`, and `dispose` interface. The main process creates the active one lazily, stores the user's choice in `assistant-settings.json` (a provider id only, no secrets), and disposes the previous bridge when the user switches. Without a saved choice it uses the first installed assistant, preferring Codex.
 ## Provider Contract
 
 Each adapter implements:

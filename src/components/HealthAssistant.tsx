@@ -20,6 +20,7 @@ import {
   type AssistantNavigation,
 } from '@/lib/health-assistant'
 import type {
+  AssistantProvider,
   DashboardData,
   HealthAssistantEvent,
   HealthAssistantStatus,
@@ -28,6 +29,8 @@ import type {
 } from '@/types'
 
 const unavailableStatus: HealthAssistantStatus = {
+  provider: 'codex',
+  providers: [],
   available: false,
   connected: false,
   authenticated: false,
@@ -50,11 +53,16 @@ function archiveData(archive: RawHealthArchive | null | undefined) {
     .sort((left, right) => left.selectedDate.localeCompare(right.selectedDate))
 }
 
+function providerLabel(status: HealthAssistantStatus) {
+  return status.providers.find((provider) => provider.id === status.provider)?.label ?? 'Codex'
+}
+
 function statusLabel(status: HealthAssistantStatus, hasBridge: boolean) {
   if (!hasBridge) return 'Desktop only'
-  if (!status.available) return 'Codex not found'
-  if (!status.authenticated) return 'Sign in to Codex'
-  return status.connected ? 'Codex connected' : 'Codex ready'
+  const label = providerLabel(status)
+  if (!status.available) return `${label} not found`
+  if (!status.authenticated) return `Sign in to ${label}`
+  return status.connected ? `${label} connected` : `${label} ready`
 }
 
 function createQueue() {
@@ -96,10 +104,12 @@ export function HealthAssistant({
   const pageRef = useRef(page)
   const navigateRef = useRef(onNavigate)
   const [status, setStatus] = useState(unavailableStatus)
+  const statusRef = useRef(status)
 
   useEffect(() => { dataRef.current = data }, [data])
   useEffect(() => { pageRef.current = page }, [page])
   useEffect(() => { navigateRef.current = onNavigate }, [onNavigate])
+  useEffect(() => { statusRef.current = status }, [status])
 
   const refreshStatus = useCallback(async () => {
     if (!window.healthAssistant) {
@@ -111,7 +121,7 @@ export function HealthAssistant({
     } catch (error) {
       setStatus({
         ...unavailableStatus,
-        error: error instanceof Error ? error.message : 'Codex is unavailable.',
+        error: error instanceof Error ? error.message : 'The assistant is unavailable.',
       })
     }
   }, [])
@@ -177,7 +187,7 @@ export function HealthAssistant({
         const navigation = parseAssistantNavigation(fullText)
         const finalText = stripAssistantNavigation(fullText)
         if (navigation) navigateRef.current(navigation)
-        if (!finalText) throw new Error('Codex completed the turn without a response.')
+        if (!finalText) throw new Error(`${providerLabel(statusRef.current)} completed the turn without a response.`)
         if (finalText !== lastVisibleText) {
           yield { content: [{ type: 'text', text: finalText }] }
         }
@@ -207,8 +217,9 @@ export function HealthAssistant({
           ready={ready}
           onClose={() => onOpenChange(false)}
           onStatusRefresh={refreshStatus}
+          onStatusChange={setStatus}
         />
-        <AssistantThread ready={ready} />
+        <AssistantThread ready={ready} providerLabel={providerLabel(status)} />
       </aside>
       {open && <button className="assistant-scrim" aria-label="Close health assistant" onClick={() => onOpenChange(false)} />}
     </AssistantRuntimeProvider>
@@ -220,11 +231,13 @@ function AssistantHeader({
   ready,
   onClose,
   onStatusRefresh,
+  onStatusChange,
 }: {
   status: HealthAssistantStatus
   ready: boolean
   onClose: () => void
   onStatusRefresh: () => Promise<void>
+  onStatusChange: (status: HealthAssistantStatus) => void
 }) {
   const runtime = useAssistantRuntime()
 
@@ -233,6 +246,18 @@ function AssistantHeader({
     runtime.thread.reset()
     await window.healthAssistant?.reset()
     await onStatusRefresh()
+  }
+
+  // Each assistant keeps its own conversation, so switching starts a fresh thread.
+  const switchProvider = async (provider: AssistantProvider) => {
+    if (!window.healthAssistant || provider === status.provider) return
+    runtime.thread.cancelRun()
+    runtime.thread.reset()
+    try {
+      onStatusChange(await window.healthAssistant.setProvider(provider))
+    } catch {
+      await onStatusRefresh()
+    }
   }
 
   return (
@@ -244,6 +269,23 @@ function AssistantHeader({
           <small><i className={ready ? 'is-ready' : ''} />{statusLabel(status, Boolean(window.healthAssistant))}</small>
         </span>
       </div>
+      {status.providers.length > 1 && (
+        <div className="assistant-provider" role="radiogroup" aria-label="Assistant">
+          {status.providers.map((provider) => (
+            <label key={provider.id} className={provider.id === status.provider ? 'active' : ''} title={provider.available ? provider.label : `${provider.label} is not installed`}>
+              <input
+                className="sr-only"
+                type="radio"
+                name="assistant-provider"
+                value={provider.id}
+                checked={provider.id === status.provider}
+                onChange={() => void switchProvider(provider.id)}
+              />
+              {provider.label}
+            </label>
+          ))}
+        </div>
+      )}
       <div className="assistant-header-actions">
         <button type="button" aria-label="New conversation" title="New conversation" onClick={() => void newConversation()}>
           <Plus aria-hidden="true" />
@@ -256,7 +298,7 @@ function AssistantHeader({
   )
 }
 
-function AssistantThread({ ready }: { ready: boolean }) {
+function AssistantThread({ ready, providerLabel }: { ready: boolean; providerLabel: string }) {
   return (
     <ThreadPrimitive.Root className="assistant-thread">
       <ThreadPrimitive.Viewport className="assistant-viewport">
@@ -287,7 +329,7 @@ function AssistantThread({ ready }: { ready: boolean }) {
               className="assistant-composer-input"
               rows={1}
               disabled={!ready}
-              placeholder={ready ? 'Ask about your health…' : 'Connect Codex Desktop to chat'}
+              placeholder={ready ? 'Ask about your health…' : `Install ${providerLabel} to chat`}
               aria-label="Message health assistant"
             />
             <AuiIf condition={(state) => !state.thread.isRunning}>
